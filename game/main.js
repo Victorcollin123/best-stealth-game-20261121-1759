@@ -1,23 +1,20 @@
-// Night Post — the browser loop. Fixed 60 Hz stepping, title / pause /
-// mute / best-time, synthesised WebAudio sounds (no audio files), and the
-// ?shot= staging mode: a staged scene is FROZEN — the loop paints it but
-// never plays it forward — and sets window.__shotReady after two paints.
+// Night Post — browser entry. Interactive loop, plus a frozen staged
+// mode for screenshots: ?shot=start|play|alert|end&seed=1 renders one
+// staged world and sets window.__shotReady when the frame is painted.
 
 import { createWorld, step } from './src/world.js';
 import { render } from './src/render.js';
 import { createInput } from './src/input.js';
 import { stageShot } from './src/shots.js';
-import { FIELD } from './src/config.js';
 
+const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-canvas.width = FIELD.w;
-canvas.height = FIELD.h;
-
 const input = createInput();
-const params = new URLSearchParams(window.location.search);
+input.attach(window);
 
-// ---- sounds (synthesised, no files)
+// Tiny synth: a few tones, no assets. AudioContext is created lazily on
+// the first key press, so a silent screenshot run never touches audio.
 let audio = null;
 let muted = false;
 function ensureAudio() {
@@ -29,157 +26,133 @@ function ensureAudio() {
     }
   }
   if (audio && audio.state === 'suspended') audio.resume();
-  return audio;
 }
-function tone(freq, dur, type = 'sine', gain = 0.08, when = 0) {
-  if (muted) return;
-  const ac = ensureAudio();
-  if (!ac) return;
-  const t = ac.currentTime + when;
-  const osc = ac.createOscillator();
-  const g = ac.createGain();
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, t);
-  g.gain.setValueAtTime(gain, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  osc.connect(g);
-  g.connect(ac.destination);
-  osc.start(t);
-  osc.stop(t + dur);
+function tone(freq, dur, type, gain) {
+  if (!audio || muted) return;
+  try {
+    const osc = audio.createOscillator();
+    const g = audio.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.value = freq;
+    g.gain.value = gain || 0.06;
+    osc.connect(g);
+    g.connect(audio.destination);
+    osc.start();
+    osc.stop(audio.currentTime + dur);
+  } catch {
+    // Audio is decoration; never let it break the game.
+  }
 }
-const sfx = {
-  pickup() {
-    tone(660, 0.12);
-    tone(880, 0.18, 'sine', 0.08, 0.09);
-  },
-  spotted() {
-    tone(220, 0.25, 'square', 0.06);
-    tone(180, 0.3, 'square', 0.06, 0.15);
-  },
-  win() {
-    [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.25, 'sine', 0.08, i * 0.12));
-  },
-  caught() {
-    tone(140, 0.5, 'sawtooth', 0.07);
-  },
-};
+function sound(name) {
+  if (name === 'pickup') {
+    tone(880, 0.12, 'sine', 0.08);
+    setTimeout(() => tone(1320, 0.15, 'sine', 0.08), 80);
+  } else if (name === 'alert') {
+    tone(220, 0.2, 'sawtooth', 0.05);
+  } else if (name === 'caught') {
+    tone(160, 0.4, 'sawtooth', 0.08);
+    setTimeout(() => tone(110, 0.5, 'sawtooth', 0.08), 150);
+  } else if (name === 'win') {
+    tone(523, 0.15, 'sine', 0.08);
+    setTimeout(() => tone(659, 0.15, 'sine', 0.08), 120);
+    setTimeout(() => tone(784, 0.3, 'sine', 0.08), 240);
+  }
+}
 
-// ---- best time (localStorage)
-const BEST_KEY = 'night-post-best';
-function fmtTime(t) {
-  const m = Math.floor(t / 60);
-  const s = Math.floor(t % 60)
-    .toString()
-    .padStart(2, '0');
-  return `${m}:${s}`;
-}
 function loadBest() {
   try {
-    return window.localStorage.getItem(BEST_KEY);
+    return Number(localStorage.getItem('nightpost.best') || 0) || null;
   } catch {
     return null;
   }
 }
 function saveBest(t) {
-  const best = loadBest();
-  if (best == null || t < parseFloat(best)) {
-    try {
-      window.localStorage.setItem(BEST_KEY, String(t));
-    } catch {
-      /* storage unavailable — the game still plays */
-    }
+  try {
+    localStorage.setItem('nightpost.best', String(t));
+  } catch {
+    // Best time is decoration; never let storage break the game.
   }
 }
 
-// ---- state
-let world = null;
-let screen = 'title'; // title | playing | paused | won | caught
-let frozen = false;
-let paints = 0;
-let prevLetters = 0;
-let prevChasing = false;
+let world = createWorld(1);
+let screen = 'title';
+let best = loadBest();
 
-function newRun(seed) {
-  world = createWorld(seed ?? Math.floor(Math.random() * 100000));
-  screen = 'playing';
-  prevLetters = 0;
-  prevChasing = false;
-}
-
-function ui() {
-  const best = loadBest();
-  return { screen, bestTime: best == null ? null : fmtTime(parseFloat(best)), muted };
-}
-
-// ---- staging mode: ?shot=start|play|alert|end&seed=N
-const shot = params.get('shot');
-if (shot) {
-  const seed = parseInt(params.get('seed') || '1', 10);
+if (params.has('shot')) {
+  const shot = params.get('shot');
+  const seed = Number(params.get('seed') || 1);
   world = stageShot(shot, seed);
-  frozen = true;
   screen =
-    world.status === 'won' ? 'won' : world.status === 'caught' ? 'caught' : shot === 'start' ? 'title' : 'playing';
-  prevLetters = world.lettersCollected;
-  prevChasing = world.guards.some((g) => g.state === 'chase');
+    world.status === 'won'
+      ? 'won'
+      : world.status === 'caught'
+        ? 'caught'
+        : shot === 'start'
+          ? 'title'
+          : 'playing';
+  render(ctx, world, screen, { best, muted });
+  requestAnimationFrame(() => {
+    render(ctx, world, screen, { best, muted });
+    window.__shotReady = true;
+  });
 } else {
-  world = createWorld(1);
-  screen = 'title';
-}
+  let lastTime = performance.now();
+  let acc = 0;
+  let lastLetters = 0;
+  let lastChasing = false;
 
-// ---- fixed-step loop
-const DT = 1 / 60;
-let acc = 0;
-let last = performance.now();
-
-function frame(now) {
-  requestAnimationFrame(frame);
-  const elapsed = Math.min(0.25, (now - last) / 1000);
-  last = now;
-
-  if (!frozen) {
-    for (const action of input.actions()) {
-      if (action === 'start' && (screen === 'title' || screen === 'won' || screen === 'caught')) {
-        ensureAudio();
-        newRun();
-      } else if (action === 'pause' && (screen === 'playing' || screen === 'paused')) {
-        screen = screen === 'playing' ? 'paused' : 'playing';
-      } else if (action === 'mute') {
-        muted = !muted;
-      } else if (action === 'restart') {
-        ensureAudio();
-        newRun();
-      }
+  function frame(now) {
+    const dt = Math.min(0.1, (now - lastTime) / 1000);
+    lastTime = now;
+    const action = input.takeAction();
+    if (action === 'start' && screen === 'title') {
+      ensureAudio();
+      world = createWorld((Math.random() * 1e9) | 0);
+      screen = 'playing';
+      lastLetters = 0;
+      lastChasing = false;
+    } else if (action === 'pause' && (screen === 'playing' || screen === 'paused')) {
+      screen = screen === 'playing' ? 'paused' : 'playing';
+    } else if (action === 'mute') {
+      muted = !muted;
+    } else if (action === 'restart' && screen !== 'title') {
+      ensureAudio();
+      world = createWorld((Math.random() * 1e9) | 0);
+      screen = 'playing';
+      lastLetters = 0;
+      lastChasing = false;
     }
 
     if (screen === 'playing') {
-      acc += elapsed;
+      acc += dt;
+      const STEP = 1 / 60;
       let n = 0;
-      while (acc >= DT && n < 5) {
-        step(world, input.move(), DT);
-        acc -= DT;
+      while (acc >= STEP && n < 5) {
+        step(world, input.read(), STEP);
+        acc -= STEP;
         n++;
       }
-      if (world.lettersCollected > prevLetters) {
-        prevLetters = world.lettersCollected;
-        sfx.pickup();
+      if (world.lettersCollected > lastLetters) {
+        sound('pickup');
+        lastLetters = world.lettersCollected;
       }
       const chasing = world.guards.some((g) => g.state === 'chase');
-      if (chasing && !prevChasing) sfx.spotted();
-      prevChasing = chasing;
+      if (chasing && !lastChasing) sound('alert');
+      lastChasing = chasing;
       if (world.status === 'won') {
         screen = 'won';
-        saveBest(world.time);
-        sfx.win();
+        sound('win');
+        if (!best || world.time < best) {
+          best = world.time;
+          saveBest(best);
+        }
       } else if (world.status === 'caught') {
         screen = 'caught';
-        sfx.caught();
+        sound('caught');
       }
     }
+    render(ctx, world, screen, { best, muted });
+    requestAnimationFrame(frame);
   }
-
-  render(ctx, world, ui());
-  paints++;
-  if (frozen && paints >= 2) window.__shotReady = true;
+  requestAnimationFrame(frame);
 }
-
-requestAnimationFrame(frame);
