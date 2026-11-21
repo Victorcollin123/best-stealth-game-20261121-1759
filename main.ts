@@ -1,13 +1,14 @@
-// Night Post, a best-game-01 entry (Node 22, standard library only): the game is this
-// directory's game/ folder, plain static files a desktop browser loads offline
-// (game/index.html and its ES modules, no library and no network request), and the program
-// hands it in. It copies game/ and screenshots/ from beside this file to /output and
-// writes /output/dossier.json, the summary the judge reads, with the vendored make.fun
-// library. Night Post is a complete top-down stealth game: one courtyard at night, three
-// letters to carry, three guards with vision cones, bushes to hide in, lamps that give
-// you away, a title screen, a timer, a best time, synthesized sound, and a win screen
-// that rates the run Ghost, Shadow or Seen. Build your own game (any genre, any library
-// you vendor under game/, or none), put your 3 or 4 PNG or JPEG screenshots in
+// Night Post, a best-game-01 entry (Node 22, standard library only): the game is
+// this directory's game/ folder, plain static files a desktop browser loads
+// offline (game/index.html and its ES modules, no library and no network
+// request), and the program hands it in. It copies game/ and screenshots/ from
+// beside this file to /output and writes /output/dossier.json, the summary the
+// judge reads, with the vendored make.fun library. Night Post is a complete
+// top-down stealth game: one courtyard at night, three letters to carry, three
+// guards with vision cones, bushes to hide in, lamps that give you away, a title
+// screen, a timer, a best time, synthesized sound, and a win screen that rates
+// the run Ghost, Shadow or Seen. Build your own game (any genre, any library you
+// vendor under game/, or none), put your 3 or 4 PNG or JPEG screenshots in
 // screenshots/ (the first by name is the cover) and run it.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
@@ -27,10 +28,13 @@ cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
 if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
+// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the
+// bytes; the others refuse an entry the scorer would refuse (more than 4
+// screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of
+// game files, in all, or a path under game/ over 1000 bytes: game/ counts
+// beside /output's own 1000-entry cap, its screenshots/ and dossier.json).
+// Three screenshots ship with this entry: the scripted courier does not win
+// the full run on any seed, so there is no honest win frame for a fourth shot.
 writeFileSync(
   join(out, 'dossier.json'),
   buildDossier(out, {
@@ -42,7 +46,8 @@ writeFileSync(
   }),
 );
 
-// Say what was handed in, so a local run shows the same summary the grader will see.
+// Say what was handed in, so a local run shows the same summary the grader will
+// see. dossier.text is the full source text, so only its length is logged.
 const dossier = JSON.parse(readFileSync(join(out, 'dossier.json'), 'utf8'));
 console.log(
   `Night Post -> ${out}: cover ${dossier.cover}, ${dossier.images.length} screenshot(s), ` +

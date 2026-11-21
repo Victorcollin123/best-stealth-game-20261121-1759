@@ -1,24 +1,27 @@
-// Night Post: the screenshot scenes. Each shot plays the real rules forward from a fresh
-// world (seed 1) with a scripted courier, so every screenshot is a genuine frame of the
-// game, not a mock-up. The courier is cautious: it sneaks near guards, waits when the
-// next step would cross a vision cone, and retreats to the safest bush when a guard
-// grows suspicious. The same steering drives the "end" shot to a real win.
+// Night Post: the screenshot scenes. Each shot plays the real rules forward
+// from a fresh world (seed 1) with a scripted courier, so every screenshot is a
+// genuine frame of the game, not a mock-up. The courier is cautious: it sneaks
+// near guards, waits when the next step would cross a vision cone, and retreats
+// to the safest bush when a guard grows suspicious. The same steering drives the
+// "end" staging, which the tests play honestly without claiming a win.
 
 import { STEP } from './config.js';
 import { LEVEL } from './level.js';
 import { createWorld, step, guardSees, segmentHitsRect, SOLIDS } from './world.js';
 
-/** The shots, in the order they are listed (the first by name is the cover). The end shot
- *  is not one of them: the scripted courier does not win the full run on any seed in
- *  1–200, so there is no honest win frame to show — the entry ships three screenshots. */
+/** The shots, in the order they are listed (the first by name is the cover).
+ *  The end shot is not one of them: the scripted courier does not win the full
+ *  run on any seed in 1–200, so there is no honest win frame to show — the entry
+ *  ships three screenshots. */
 export const SHOTS = [
   { name: '1-start.jpg', query: '?shot=start&seed=1' },
   { name: '2-play.jpg', query: '?shot=play&seed=1' },
   { name: '3-alert.jpg', query: '?shot=alert&seed=1' },
 ];
 
-/** Open points across the courtyard: the letters, the gate, the gaps between walls, the
- *  bushes, and the corridor midpoints. Every point stands clear of every wall and crate. */
+/** Open points across the courtyard: the letters, the gate, the gaps between
+ *  walls, the bushes, and the corridor midpoints. Every point stands clear of
+ *  every wall and crate. */
 export const NAV_NODES = [
   { id: 'start', x: 80, y: 640 },
   { id: 'letter1', x: 150, y: 120 },
@@ -93,10 +96,11 @@ function segmentNearPoint(ax, ay, bx, by, px, py, radius) {
 }
 
 /**
- * The shortest route between two nodes, as a list of node ids (breadth-first search).
- * `avoid` is a list of { x, y, r } points the route must keep clear of — the guards'
- * current positions while fleeing, so the escape route does not run past a guard.
- * Returns null when no route exists. */
+ * The shortest route between two nodes, as a list of node ids (breadth-first
+ * search). `avoid` is a list of { x, y, r } points the route must keep clear
+ * of — the guards' current positions while fleeing, so the escape route does
+ * not run past a guard. Returns null when no route exists.
+ */
 export function findPath(fromId, toId, avoid = []) {
   if (fromId === toId) return [fromId];
   const edgeClear = (a, b) => {
@@ -131,12 +135,13 @@ export function findPath(fromId, toId, avoid = []) {
 }
 
 /**
- * The next point to steer for on the way to `target`: the target itself when the courier
- * can walk straight to it, otherwise the next node on the graph route there. The route
- * is recomputed when the target changes, when the path runs out, or — while `avoid` is
- * given — every half second, because the guards it routes around keep moving. This is
- * what keeps the courier out of wall corners: it follows clear corridors instead of
- * pushing straight through solid cover.
+ * The next point to steer for on the way to `target`: the target itself when
+ * the courier can walk straight to it, otherwise the next node on the graph
+ * route there. The route is recomputed when the target changes, when the path
+ * runs out, or — while `avoid` is given — every half second, because the
+ * guards it routes around keep moving. This is what keeps the courier out of
+ * wall corners: it follows clear corridors instead of pushing straight
+ * through solid cover.
  */
 function steerPoint(world, target, memory, avoid = []) {
   const player = world.player;
@@ -155,8 +160,9 @@ function steerPoint(world, target, memory, avoid = []) {
   if (stale) {
     const from = nearestNode(player.x, player.y);
     const to = nearestNode(target.x, target.y);
-    // A guard-clear route first; the wall-only route when no guard-clear one exists
-    // (a guard standing on the only exit must not leave the courier routeless).
+    // A guard-clear route first; the wall-only route when no guard-clear one
+    // exists (a guard standing on the only exit must not leave the courier
+    // routeless).
     let ids = findPath(from.id, to.id, avoid);
     if (!ids) ids = findPath(from.id, to.id);
     if (!ids) ids = [from.id, to.id];
@@ -192,9 +198,10 @@ function maxSuspicion(world) {
   return Math.max(...world.guards.map((guard) => guard.suspicion));
 }
 
-/** True when any guard would see a courier standing at (x, y) right now. A guard pausing
- *  at a waypoint sweeps its cone around as it looks about, so the whole sweep counts as
- *  seen — a probe that is clear this instant can be in the cone half a second later. */
+/** True when any guard would see a courier standing at (x, y) right now. A
+ *  guard pausing at a waypoint sweeps its cone around as it looks about, so
+ *  the whole sweep counts as seen — a probe that is clear this instant can be
+ *  in the cone half a second later. */
 function seenAt(world, x, y) {
   for (const guard of world.guards) {
     if (guardSees(guard, { x, y }).visible) return true;
@@ -217,12 +224,13 @@ function moveToward(world, target, sneak) {
 }
 
 /**
- * One step of the cautious courier, heading for `target`. It flees away from a guard
- * that chases or grows suspicious, hides when the heat is on, and waits rather than
- * walking into a cone — detouring to a bush if the wait drags on. If it ever pushes
- * against a wall corner without moving, it breaks for the nearest bush instead: a
- * wedged courier is a caught courier. `options.brave` skips the personal-space rule:
- * the alert shot stands its ground on purpose, to be spotted.
+ * One step of the cautious courier, heading for `target`. It flees away from a
+ * guard that chases or grows suspicious, hides when the heat is on, and waits
+ * rather than walking into a cone — detouring to a bush if the wait drags on.
+ * If it ever pushes against a wall corner without moving, it breaks for the
+ * nearest bush instead: a wedged courier is a caught courier. `options.brave`
+ * skips the personal-space rule: the alert shot stands its ground on purpose,
+ * to be spotted.
  */
 export function cautiousStep(world, target, memory, dt, options = {}) {
   const player = world.player;
@@ -252,9 +260,10 @@ export function cautiousStep(world, target, memory, dt, options = {}) {
   return input;
 }
 
-/** The bush to run for while fleeing: the one furthest from every guard, discounted by how
- *  far the courier must run to reach it. A bush next to another guard's patrol is no
- *  hiding place at all — the nearest bush can sit behind the guard. */
+/** The bush to run for while fleeing: the one furthest from every guard,
+ *  discounted by how far the courier must run to reach it. A bush next to
+ *  another guard's patrol is no hiding place at all — the nearest bush can sit
+ *  behind the guard. */
 function bestFleeBush(player, guards) {
   let best = null;
   let bestScore = -Infinity;
@@ -270,10 +279,10 @@ function bestFleeBush(player, guards) {
   return best;
 }
 
-/** The bush to retreat to: the nearest one further from the danger guard than the courier
- *  is — a short hop away from the threat, not a cross-map run — and clear of every other
- *  guard too. Falls back to the safest bush when every bush sits closer to the guard
- *  than the courier does. */
+/** The bush to retreat to: the nearest one further from the danger guard than
+ *  the courier is — a short hop away from the threat, not a cross-map run —
+ *  and clear of every other guard too. Falls back to the safest bush when
+ *  every bush sits closer to the guard than the courier does. */
 function retreatBush(player, guards, dangerGuard) {
   const playerDist = Math.hypot(dangerGuard.x - player.x, dangerGuard.y - player.y);
   let best = null;
@@ -301,15 +310,17 @@ function decide(world, target, memory, dt, bush, inBush, options = {}) {
     null,
   );
 
-  // Routes keep 60 px clear of every guard: a graph route whose first leg runs past a
-  // guard is worse than no route at all, and the direct-steer shortcut respects it too.
+  // Routes keep 60 px clear of every guard: a graph route whose first leg runs
+  // past a guard is worse than no route at all, and the direct-steer shortcut
+  // respects it too.
   const avoid = world.guards.map((g) => ({ x: g.x, y: g.y, r: 60 }));
 
-  // Fleeing: a chasing guard, or one past 0.6 suspicion (already investigating, about to
-  // chase). Run for the bush furthest from the guard, routing around the walls on the
-  // navigation graph instead of straight through them — and keep the same bush until the
-  // chase is over, so the courier does not dither between two hiding spots. The courier
-  // is only 20 px/s faster than a chasing guard, so the route matters more than the speed.
+  // Fleeing: a chasing guard, or one past 0.6 suspicion (already investigating,
+  // about to chase). Run for the bush furthest from the guard, routing around
+  // the walls on the navigation graph instead of straight through them — and
+  // keep the same bush until the chase is over, so the courier does not dither
+  // between two hiding spots. The courier is only 20 px/s faster than a
+  // chasing guard, so the route matters more than the speed.
   const fleeing = chaser || (threat && threat.suspicion > 0.6);
   if (!fleeing) {
     memory.fleeBush = null;
@@ -320,9 +331,10 @@ function decide(world, target, memory, dt, bush, inBush, options = {}) {
     if (!memory.fleeBush) memory.fleeBush = bestFleeBush(player, world.guards);
     const guardDistance = Math.hypot(guard.x - player.x, guard.y - player.y);
     if (guardDistance < 100) {
-      // The guard is on top of the courier: run straight away from it first. The graph
-      // route's first node may sit right next to the guard, and following it would run
-      // the courier into the guard it is fleeing. steerPoint still routes around walls.
+      // The guard is on top of the courier: run straight away from it first.
+      // The graph route's first node may sit right next to the guard, and
+      // following it would run the courier into the guard it is fleeing.
+      // steerPoint still routes around walls.
       const away = {
         x: Math.max(40, Math.min(1240, player.x + ((player.x - guard.x) / guardDistance) * 200)),
         y: Math.max(40, Math.min(680, player.y + ((player.y - guard.y) / guardDistance) * 200)),
@@ -332,10 +344,11 @@ function decide(world, target, memory, dt, bush, inBush, options = {}) {
     return moveToward(world, steerPoint(world, memory.fleeBush, memory, avoid), false);
   }
 
-  // The guard to get away from: the one that sees the courier, else the closest one.
-  // The retreat bush is the nearest one further from that guard than the courier is —
-  // a short hop away from the threat. The nearest bush of all can sit behind the guard,
-  // and running for it would cross the guard's path.
+  // The guard to get away from: the one that sees the courier, else the
+  // closest one. The retreat bush is the nearest one further from that guard
+  // than the courier is — a short hop away from the threat. The nearest bush
+  // of all can sit behind the guard, and running for it would cross the
+  // guard's path.
   const dangerGuard =
     world.guards.find((guard) => guardSees(guard, player).visible) ||
     world.guards.reduce((nearest, guard) =>
@@ -346,19 +359,20 @@ function decide(world, target, memory, dt, bush, inBush, options = {}) {
     );
   const safeBush = retreatBush(player, world.guards, dangerGuard);
 
-  // Exposed: the courier is standing inside a cone right now. Waiting here only lets
-  // suspicion climb, and walking on toward the target crosses more of it — so fall back
-  // to the safest bush and let the guard lose sight of it, instead of standing in the
-  // open. The probe below only checks the next step; this one checks where it stands.
+  // Exposed: the courier is standing inside a cone right now. Waiting here
+  // only lets suspicion climb, and walking on toward the target crosses more
+  // of it — so fall back to the safest bush and let the guard lose sight of
+  // it, instead of standing in the open. The probe below only checks the next
+  // step; this one checks where it stands.
   if (!options.brave && seenAt(world, player.x, player.y)) {
     if (!inBush) return moveToward(world, steerPoint(world, safeBush, memory, avoid), true);
     return { x: 0, y: 0, sneak: true };
   }
 
-  // Personal space: a guard this close will hear the courier's footsteps or simply walk
-  // into it, even without seeing it. Standing still and waiting is wrong when the guard
-  // is the one closing the distance, so back off to the safest bush and wait there
-  // until the guard has moved on.
+  // Personal space: a guard this close will hear the courier's footsteps or
+  // simply walk into it, even without seeing it. Standing still and waiting is
+  // wrong when the guard is the one closing the distance, so back off to the
+  // safest bush and wait there until the guard has moved on.
   if (!options.brave) {
     const closeGuard = world.guards.some(
       (guard) => Math.hypot(guard.x - player.x, guard.y - player.y) < 100,
@@ -376,9 +390,9 @@ function decide(world, target, memory, dt, bush, inBush, options = {}) {
   }
   if (memory.detour) {
     if (!inBush) return moveToward(world, steerPoint(world, bush, memory, avoid), true);
-    // Wait in the bush until the heat is off AND the guards have actually moved away —
-    // suspicion alone decays while a guard still stands just outside the cone's edge,
-    // and stepping out then walks straight back into it.
+    // Wait in the bush until the heat is off AND the guards have actually moved
+    // away — suspicion alone decays while a guard still stands just outside the
+    // cone's edge, and stepping out then walks straight back into it.
     const guardsNear = world.guards.some(
       (guard) => Math.hypot(guard.x - player.x, guard.y - player.y) < 200,
     );
@@ -386,12 +400,12 @@ function decide(world, target, memory, dt, bush, inBush, options = {}) {
     memory.detour = false;
     memory.waitTimer = 0;
   }
-  // Look a second and a half ahead: step into the cone and the courier waits instead.
-  // Half a second was too short — the courier started moves into windows that closed
-  // mid-stride, and a guard's cone sweeps onto it before it clears the danger.
-  // The courier always sneaks on the approach — running carries 100 px and a guard
-  // 320 px away closes that gap in two seconds, so running "when clear" is how it
-  // gets heard. Only a chase runs.
+  // Look a second and a half ahead: step into the cone and the courier waits
+  // instead. Half a second was too short — the courier started moves into
+  // windows that closed mid-stride, and a guard's cone sweeps onto it before
+  // it clears the danger. The courier always sneaks on the approach — running
+  // carries 100 px and a guard 320 px away closes that gap in two seconds, so
+  // running "when clear" is how it gets heard. Only a chase runs.
   const sneak = true;
   const speed = 85;
   const probe = moveToward(world, steerPoint(world, target, memory), sneak);
@@ -432,7 +446,7 @@ function runUntil(world, targets, done, maxSeconds) {
  * 'start': five seconds of the guards patrolling, title over it.
  * 'play': the courier sneaks toward the first letter until it is collected.
  * 'alert': the courier stands on a guard's patrol path until it is chased, then runs.
- * 'end': the courier collects all three letters and reaches the gate.
+ * 'end': the courier collects letters and heads for the gate along the full route.
  */
 export function stageShot(name, seed = 1) {
   const world = createWorld(seed);
@@ -476,10 +490,11 @@ export function stageShot(name, seed = 1) {
     return { world, steps, seconds: steps * STEP };
   }
   if (name === 'end') {
-    // West letter, then through the west gap, across the middle, over the middle wall's
-    // top gap to the north-middle letter; east through the east wall's top gap to the
-    // east letter, then north to the gate. Every leg was checked against every wall and
-    // crate, so the route never asks the courier to walk through solid cover.
+    // West letter, then through the west gap, across the middle, over the middle
+    // wall's top gap to the north-middle letter; east through the east wall's top
+    // gap to the east letter, then north to the gate. Every leg was checked
+    // against every wall and crate, so the route never asks the courier to walk
+    // through solid cover.
     const exit = LEVEL.exit;
     const targets = [
       LEVEL.letters[0],

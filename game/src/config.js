@@ -1,30 +1,29 @@
-// Night Post: every tuning number and colour in one place. The playfield is a fixed
-// 1280x720 logical area; the renderer scales it to the window, so no rule below depends
-// on the screen size. A courtyard at night: the courier crosses it, guards sweep it with
-// lamplight, and the exit gate waits at the far corner.
+// Night Post: every tuning number and colour lives here, so the rules can be
+// read in one place. The courtyard is a fixed 1280x720 field; the renderer
+// scales it to the window, so nothing below depends on the screen size.
 
 export const FIELD = { width: 1280, height: 720 };
 
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
+/** The simulation's fixed step, in seconds: 60 updates a second, whatever the display does. */
 export const STEP = 1 / 60;
 
 export const PLAYER = {
   radius: 14,
   walkSpeed: 170,
   sneakSpeed: 85,
-  /** Noise a running courier makes, in pixels of hearing range; sneaking is far quieter. */
+  /** Hearing range of a footstep, in pixels: running carries far, sneaking barely at all. */
   runNoise: 100,
   sneakNoise: 30,
-  /** Seconds between footstep noises while moving. */
+  /** Seconds between footstep noises while the courier is moving. */
   noiseInterval: 0.5,
 };
 
 export const GUARD = {
   radius: 14,
-  /** How far a guard can see, in pixels, and half the cone's angle in radians. */
+  /** How far a guard can see, and half the vision cone's angle in radians. */
   visionRange: 230,
   visionHalfAngle: 0.6,
-  /** Touching the courier this close ends the run. */
+  /** A guard that has noticed the courier catches it this close. */
   catchRadius: 26,
   /** Inside a bush, a guard only spots the courier closer than this. */
   bushSpotRange: 55,
@@ -91,5 +90,5 @@ export const PALETTE = {
 
 export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 
-/** Where the best time is kept between visits (this browser only). */
+/** Where the best delivery time is kept between visits (this browser only). */
 export const BEST_KEY = 'night-post.best';

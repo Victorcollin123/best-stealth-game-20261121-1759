@@ -1,12 +1,13 @@
-// Night Post, level one: "The Courtyard". One walled courtyard at night, drawn as data:
-// walls and crates block movement and sight, bushes hide the courier, lamps make the
-// courier easier to spot, letters are the goal, the gate is the way out. Every guard
-// patrol loop was checked leg by leg against every wall and crate, so no patrol ever
-// walks through solid cover. Coordinates are field pixels (1280x720).
+// Night Post, level one: "The Courtyard". One walled courtyard at night, drawn
+// as data: walls and crates block movement and sight, bushes hide the courier,
+// lamps make the courier easier to spot, letters are the goal, the gate is the
+// way out. Every guard patrol loop was checked leg by leg against every wall and
+// crate, so no patrol ever walks through solid cover. Coordinates are field
+// pixels (1280x720).
 //
-// Wren's patrol was moved east in the finish pass: she used to walk the west leg at
-// x=150, head-on into the courier walking north to the first letter at (150,120).
-// She now patrols up and down x=260 alone, so the walk to letter 1 is clear of her.
+// Wren patrols the east leg of the west room only: she walks up and down x=260,
+// so the courier's walk north to the first letter at (150,120) never meets her
+// head-on in the narrow west column. Her speed and pauses are unchanged.
 
 export const LEVEL = {
   name: 'The Courtyard',
@@ -18,7 +19,7 @@ export const LEVEL = {
     { x: 0, y: 696, w: 1280, h: 24 },
     { x: 0, y: 0, w: 24, h: 720 },
     { x: 1256, y: 0, w: 24, h: 720 },
-    // The west wall, with a gate in it at y 300-420 between the south and north rooms.
+    // The west wall, with a gap in it at y 300-420 between the south and north rooms.
     { x: 300, y: 0, w: 24, h: 300 },
     { x: 300, y: 420, w: 24, h: 276 },
     // The middle wall, open at the top (y 0-120) and the bottom (y 480-696).
@@ -33,8 +34,8 @@ export const LEVEL = {
     { x: 960, y: 120, w: 140, h: 24 },
   ],
 
-  /** Crates: low solid blocks, cover that blocks movement and sight. Each sits clear of
-   *  every guard patrol leg (a crate on a leg traps the guard against it forever). */
+  /** Crates: low solid blocks, cover that blocks movement and sight. Each sits
+   *  clear of every guard patrol leg (a crate on a leg traps the guard against it). */
   crates: [
     { x: 340, y: 180, w: 56, h: 56 },
     { x: 600, y: 520, w: 56, h: 56 },
@@ -43,8 +44,8 @@ export const LEVEL = {
     { x: 180, y: 520, w: 56, h: 56 },
   ],
 
-  /** Bushes: circles the courier can stand in. A guard cannot spot the courier inside
-   *  a bush unless it comes very close. Bushes block nothing else. */
+  /** Bushes: circles the courier can stand in. A guard cannot spot the courier
+   *  inside a bush unless it comes very close. Bushes block nothing else. */
   bushes: [
     { x: 430, y: 60, r: 34 },
     { x: 760, y: 200, r: 34 },

@@ -1,7 +1,8 @@
-// Night Post: a tiny static server for local play-testing (Node 22, standard library
-// only). Serves this directory on http://localhost:8080 by default, so the game opens at
-// http://localhost:8080/game/ and the screenshot scenes at
-// http://localhost:8080/game/?shot=play&seed=1. `node serve.ts --port 8902` picks a port.
+// Night Post: a tiny static server for local play-testing (Node 22, standard
+// library only). Serves this directory on http://localhost:8080 by default, so
+// the game opens at http://localhost:8080/game/ and the screenshot scenes at
+// http://localhost:8080/game/?shot=play&seed=1. `node serve.ts --port 8902`
+// picks a port.
 
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';

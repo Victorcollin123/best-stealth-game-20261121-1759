@@ -1,8 +1,9 @@
-// Night Post: the browser half. A fixed 60 Hz simulation loop, a title screen, pause and
-// mute, a best time kept in localStorage, and small synthesized sounds (no audio files).
-// With ?shot=start|play|alert|end&seed=N in the URL the game stages that screenshot
-// scene instead of starting the title screen, and sets window.__shotReady once it has
-// painted twice — that is what the screenshot step waits on.
+// Night Post: the browser half. A fixed 60 Hz simulation loop, a title screen,
+// pause and mute, a best time kept in localStorage, and small synthesized
+// sounds (no audio files). With ?shot=start|play|alert|end&seed=N in the URL
+// the game stages that screenshot scene instead of starting the title screen,
+// and sets window.__shotReady once it has painted twice — that is what the
+// screenshot step waits on.
 
 import { FIELD, STEP, BEST_KEY, FONT, PALETTE } from './config.js';
 import { createWorld, step } from './world.js';
@@ -110,8 +111,9 @@ function paint() {
 }
 
 // --- Screenshot staging ---------------------------------------------------
-// A staged scene is already final: the loop paints it but never plays it forward,
-// or a chasing guard would catch the standing courier before the screenshot lands.
+// A staged scene is already final: the loop paints it but never plays it
+// forward, or a chasing guard would catch the standing courier before the
+// screenshot lands.
 const frozen = Boolean(shotName);
 let staged = false;
 if (shotName) {

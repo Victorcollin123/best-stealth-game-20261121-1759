@@ -1,7 +1,8 @@
-// Night Post: the whole simulation, with no browser in it. The renderer only draws this
-// state; the input loop only feeds it a direction and a sneak flag. That split is what
-// lets the game be unit-tested in plain Node and the screenshots be played forward by a
-// script that uses the real rules. Every number comes from config.js.
+// Night Post: the whole simulation, with no browser in it. The renderer only
+// draws this state; the input loop only feeds it a direction and a sneak flag.
+// That split is what lets the game be unit-tested in plain Node and the
+// screenshots be played forward by a script that uses the real rules. Every
+// number comes from config.js.
 
 import { FIELD, STEP, PLAYER, GUARD, SUSPICION, LETTERS_TO_WIN, LETTER_PICKUP_RADIUS } from './config.js';
 import { LEVEL } from './level.js';
@@ -100,9 +101,10 @@ export function pointInExit(x, y) {
 }
 
 /**
- * What a guard makes of the courier right now. Visible means the courier is inside the
- * vision cone, within range, with a clear line of sight, and not hidden in a bush beyond
- * the close-spotting range. The returned factors explain the suspicion rate.
+ * What a guard makes of the courier right now. Visible means the courier is
+ * inside the vision cone, within range, with a clear line of sight, and not
+ * hidden in a bush beyond the close-spotting range. The returned factors
+ * explain the suspicion rate.
  */
 export function guardSees(guard, player) {
   const dist = distance(guard.x, guard.y, player.x, player.y);

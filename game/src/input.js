@@ -1,6 +1,7 @@
-// Night Post: the keyboard. WASD or arrows move, either Shift sneaks, Enter starts,
-// R restarts, P pauses, M mutes. One-shot actions (start, restart, pause, mute) are
-// queued and drained once per frame so a single press never fires twice.
+// Night Post: the keyboard. WASD or arrows move, either Shift sneaks, Enter
+// starts, R restarts, P pauses, M mutes. One-shot actions (start, restart,
+// pause, mute) are queued and drained once per frame so a single press never
+// fires twice.
 
 const KEY_ACTIONS = {
   Enter: 'start',

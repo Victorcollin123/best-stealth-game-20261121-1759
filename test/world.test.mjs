@@ -1,6 +1,6 @@
-// Night Post: unit tests for the simulation and the screenshot autopilot. Plain Node,
-// no framework: `node test/world.test.mjs` from the entry root. Every test builds its
-// own world, so they run in any order and none depends on another.
+// Night Post: unit tests for the simulation and the screenshot autopilot. Plain
+// Node, no framework: `node test/world.test.mjs` from the entry root. Every test
+// builds its own world, so they run in any order and none depends on another.
 
 import assert from 'node:assert/strict';
 import { createWorld, step, guardSees, segmentBlocked, circleHitsAny } from '../game/src/world.js';
@@ -193,8 +193,8 @@ test('the segment and circle helpers agree with the level', () => {
 });
 
 test('Wren patrols the east leg of the west room, clear of letter 1', () => {
-  // The finish tweak: Wren walks up and down x=260 only, so the courier's walk north
-  // to letter 1 at (150,120) never meets her head-on in the narrow west column.
+  // The finish tweak: Wren walks up and down x=260 only, so the courier's walk
+  // north to letter 1 at (150,120) never meets her head-on in the narrow west column.
   const wren = LEVEL.guards.find((g) => g.name === 'Wren');
   assert.deepEqual(wren.waypoints, [
     { x: 260, y: 200 },
@@ -238,11 +238,11 @@ test('the navigation graph connects every open point with walkable legs', () => 
 });
 
 test('the autopilot plays the full route on seed 1 (no win frame is claimed)', () => {
-  // The scripted courier does not win the full run on any seed in 1–200, even after
-  // Wren's patrol moved east — so the entry ships three screenshots and no end shot.
-  // What this test pins down is that the staging plays the whole route honestly:
-  // it collects at least two letters before the run ends, and it ends the same way
-  // every time (see the determinism test below).
+  // The scripted courier does not win the full run on any seed in 1–200, even
+  // after Wren's patrol moved east — so the entry ships three screenshots and
+  // no end shot. What this test pins down is that the staging plays the whole
+  // route honestly: it collects at least two letters before the run ends, and
+  // it ends the same way every time (see the determinism test below).
   const { world, seconds } = stageShot('end', 1);
   assert.ok(world.lettersCollected >= 2, `only ${world.lettersCollected} letters in ${seconds}s`);
   assert.ok(seconds < 150, `run took ${seconds}s`);

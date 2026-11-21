@@ -1,7 +1,8 @@
-// Night Post: everything the player sees, drawn on one canvas. The camera is fixed on the
-// whole 1280x720 courtyard — a stealth game reads better when the whole level is in view
-// than when the screen scrolls. Vision cones are raycast so they stop at walls, which is
-// what makes the hiding spots readable at a glance.
+// Night Post: everything the player sees, drawn on one canvas. The camera is
+// fixed on the whole 1280x720 courtyard — a stealth game reads better when the
+// whole level is in view than when the screen scrolls. Vision cones are
+// raycast so they stop at walls, which is what makes the hiding spots readable
+// at a glance.
 
 import { FIELD, GUARD, PALETTE, FONT, LETTERS_TO_WIN } from './config.js';
 import { LEVEL } from './level.js';
@@ -59,7 +60,7 @@ function drawFloor(ctx) {
   ctx.stroke();
 }
 
-function drawLamps(ctx, world) {
+function drawLamps(ctx) {
   for (const lamp of LEVEL.lamps) {
     const gradient = ctx.createRadialGradient(lamp.x, lamp.y, 6, lamp.x, lamp.y, lamp.r);
     gradient.addColorStop(0, 'rgba(242, 201, 76, 0.30)');
@@ -313,7 +314,7 @@ function drawEnd(ctx, world, ui) {
 /** Draw the whole scene: floor, light, cover, cones, pieces, HUD, and any screen over it. */
 export function render(ctx, world, ui) {
   drawFloor(ctx);
-  drawLamps(ctx, world);
+  drawLamps(ctx);
   drawBushes(ctx);
   drawWalls(ctx);
   drawLetters(ctx, world);
