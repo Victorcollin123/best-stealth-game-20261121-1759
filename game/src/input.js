@@ -1,63 +1,76 @@
-// Night Post: the keyboard. WASD or arrows move, either Shift sneaks, Enter
-// starts, R restarts, P pauses, M mutes. One-shot actions (start, restart,
-// pause, mute) are queued and drained once per frame so a single press never
-// fires twice.
+// Night Post — keyboard input. Movement keys are read live each frame;
+// one-shot actions (start, pause, mute, restart) go on a queue the loop
+// consumes, so a single press is never missed or doubled.
 
-const KEY_ACTIONS = {
-  Enter: 'start',
-  KeyR: 'restart',
-  KeyP: 'pause',
-  KeyM: 'mute',
+const MOVE_KEYS = {
+  KeyW: { x: 0, y: -1 },
+  ArrowUp: { x: 0, y: -1 },
+  KeyS: { x: 0, y: 1 },
+  ArrowDown: { x: 0, y: 1 },
+  KeyA: { x: -1, y: 0 },
+  ArrowLeft: { x: -1, y: 0 },
+  KeyD: { x: 1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
 };
 
-const PREVENTED = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
+const ACTION_KEYS = {
+  Enter: 'start',
+  KeyP: 'pause',
+  KeyM: 'mute',
+  KeyR: 'restart',
+};
 
 export function createInput() {
-  const held = new Set();
-  const actions = [];
+  const keys = new Set();
+  const queue = [];
 
-  function onKeyDown(event) {
-    if (PREVENTED.has(event.code)) event.preventDefault();
-    if (event.repeat) return;
-    const action = KEY_ACTIONS[event.code];
-    if (action) actions.push(action);
-    held.add(event.code);
+  function onKeyDown(e) {
+    if (MOVE_KEYS[e.code] || ACTION_KEYS[e.code] || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      e.preventDefault();
+    }
+    if (e.repeat) return;
+    keys.add(e.code);
+    const action = ACTION_KEYS[e.code];
+    if (action) queue.push(action);
   }
 
-  function onKeyUp(event) {
-    held.delete(event.code);
+  function onKeyUp(e) {
+    keys.delete(e.code);
   }
 
-  function onBlur() {
-    held.clear();
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
   }
 
   return {
-    attach() {
-      window.addEventListener('keydown', onKeyDown);
-      window.addEventListener('keyup', onKeyUp);
-      window.addEventListener('blur', onBlur);
-    },
-    detach() {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-    },
-    /** The movement direction right now, plus whether the courier is sneaking. */
-    direction() {
+    /** Current movement vector {x, y, sneak}; zero when no key is held. */
+    move() {
       let x = 0;
       let y = 0;
-      if (held.has('KeyA') || held.has('ArrowLeft')) x -= 1;
-      if (held.has('KeyD') || held.has('ArrowRight')) x += 1;
-      if (held.has('KeyW') || held.has('ArrowUp')) y -= 1;
-      if (held.has('KeyS') || held.has('ArrowDown')) y += 1;
-      return { x, y, sneak: held.has('ShiftLeft') || held.has('ShiftRight') };
+      for (const code of keys) {
+        const m = MOVE_KEYS[code];
+        if (m) {
+          x += m.x;
+          y += m.y;
+        }
+      }
+      return {
+        x,
+        y,
+        sneak: keys.has('ShiftLeft') || keys.has('ShiftRight'),
+      };
     },
-    /** The one-shot actions pressed since the last drain. */
-    drainActions() {
-      const drained = [...actions];
-      actions.length = 0;
-      return drained;
+    /** Drain the one-shot action queue, in order. */
+    actions() {
+      return queue.splice(0, queue.length);
+    },
+    /** Test hook: pretend a key was pressed (no browser needed). */
+    press(code) {
+      onKeyDown({ code, repeat: false, preventDefault() {} });
+    },
+    release(code) {
+      onKeyUp({ code });
     },
   };
 }

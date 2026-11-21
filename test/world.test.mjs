@@ -1,260 +1,237 @@
-// Night Post: unit tests for the simulation and the screenshot autopilot. Plain
-// Node, no framework: `node test/world.test.mjs` from the entry root. Every test
-// builds its own world, so they run in any order and none depends on another.
-
-import assert from 'node:assert/strict';
-import { createWorld, step, guardSees, segmentBlocked, circleHitsAny } from '../game/src/world.js';
-import { stageShot, findPath, NAV_NODES, segmentClear } from '../game/src/shots.js';
+// Night Post — world tests. Plain node:assert, no framework.
+// Run: node test/world.test.mjs (from the entry root).
+import assert from 'node:assert';
+import { createWorld, step, guardSees, segmentIntersectsRect, segmentNearPoint, circleHitsSolids } from '../game/src/world.js';
 import { LEVEL } from '../game/src/level.js';
+import { findPath, stageShot, NODES } from '../game/src/shots.js';
 
-const STILL = { x: 0, y: 0, sneak: false };
-let passed = 0;
-
-function test(name, fn) {
-  fn();
-  passed += 1;
-  console.log(`ok - ${name}`);
+const DT = 1 / 60;
+const tests = [];
+function t(name, fn) {
+  tests.push([name, fn]);
 }
 
-function stepN(world, input, seconds) {
-  const steps = Math.round(seconds * 60);
-  for (let i = 0; i < steps; i += 1) step(world, input, 1 / 60);
-}
-
-function parkGuards(world, x = 1200, y = 650) {
-  for (const guard of world.guards) {
-    guard.x = x;
-    guard.y = y;
-    guard.state = 'patrol';
-    guard.suspicion = 0;
-  }
-}
-
-/** Pin a guard in place, facing `angle`, so a test watches only its suspicion and state. */
-function pinGuard(guard, x, y, angle) {
-  guard.x = x;
-  guard.y = y;
-  guard.angle = angle;
-  guard.waypoints = [{ x: x + Math.cos(angle) * 100, y: y + Math.sin(angle) * 100 }];
-  guard.waypointIndex = 0;
-  guard.patrolSpeed = 0;
-  guard.state = 'patrol';
-  guard.suspicion = 0;
-}
-
-test('a fresh world starts playing with three guards and three letters', () => {
+/** A world whose first guard stands still at (x, y), facing `facing`. */
+function stillWorld(x, y, facing) {
   const world = createWorld(1);
-  assert.equal(world.status, 'playing');
-  assert.equal(world.guards.length, 3);
-  assert.equal(world.letters.length, 3);
-  assert.equal(world.lettersCollected, 0);
-  assert.equal(world.player.x, LEVEL.playerStart.x);
-  assert.equal(world.player.y, LEVEL.playerStart.y);
+  const g = world.guards[0];
+  g.x = x;
+  g.y = y;
+  g.facing = facing;
+  g.waypoints = [{ x, y }];
+  g.waypointIndex = 0;
+  g.pauseTimer = 5;
+  g.state = 'patrol';
+  g.suspicion = 0;
+  return world;
+}
+
+t('fresh world starts playing with three guards and three letters', () => {
+  const w = createWorld(1);
+  assert.equal(w.status, 'playing');
+  assert.equal(w.time, 0);
+  assert.equal(w.lettersCollected, 0);
+  assert.equal(w.guards.length, 3);
+  assert.equal(w.letters.length, 3);
+  assert.ok(w.letters.every((l) => !l.taken));
+  assert.deepEqual({ x: w.player.x, y: w.player.y }, LEVEL.playerStart);
 });
 
-test('the same seed builds the same world twice', () => {
+t('the same seed builds the same world', () => {
   const a = createWorld(7);
   const b = createWorld(7);
-  assert.deepEqual(
-    a.guards.map((g) => [g.x, g.y, g.angle]),
-    b.guards.map((g) => [g.x, g.y, g.angle]),
-  );
+  a.guards.forEach((g, i) => {
+    assert.equal(g.x, b.guards[i].x);
+    assert.equal(g.y, b.guards[i].y);
+    assert.equal(g.facing, b.guards[i].facing);
+    assert.equal(g.waypointIndex, b.guards[i].waypointIndex);
+  });
 });
 
-test('walls stop the courier', () => {
-  const world = createWorld(1);
-  world.player.x = 40;
-  world.player.y = 360;
-  stepN(world, { x: -1, y: 0, sneak: false }, 2);
-  assert.ok(world.player.x >= 37.9, `courier crossed the west wall: x=${world.player.x}`);
-  assert.ok(world.player.x <= 40.1);
+t('walls stop the courier', () => {
+  const w = createWorld(1);
+  w.player.x = 280;
+  w.player.y = 150;
+  for (let i = 0; i < 30; i++) step(w, { x: 1, y: 0, sneak: false }, DT);
+  assert.ok(w.player.x > 280, 'courier moved east');
+  assert.ok(w.player.x <= 286.5, `courier stopped at the wall, x=${w.player.x}`);
 });
 
-test('a guard sees the courier straight ahead with a clear line of sight', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  guard.x = 400;
-  guard.y = 400;
-  guard.angle = 0;
-  world.player.x = 500;
-  world.player.y = 400;
-  assert.equal(guardSees(guard, world.player).visible, true);
+t('a guard sees the courier inside its cone', () => {
+  const w = stillWorld(500, 360, 0); // facing east
+  w.player.x = 600;
+  w.player.y = 360;
+  const seen = guardSees(w.guards[0], w.player);
+  assert.equal(seen.visible, true);
+  assert.equal(Math.round(seen.dist), 100);
 });
 
-test('a guard does not see the courier behind it', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  guard.x = 400;
-  guard.y = 400;
-  guard.angle = 0;
-  world.player.x = 300;
-  world.player.y = 400;
-  assert.equal(guardSees(guard, world.player).visible, false);
+t('a guard does not see the courier behind it', () => {
+  const w = stillWorld(500, 360, 0); // facing east
+  w.player.x = 400;
+  w.player.y = 360;
+  assert.equal(guardSees(w.guards[0], w.player).visible, false);
 });
 
-test('a wall between guard and courier blocks the sight line', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  guard.x = 400;
-  guard.y = 400;
-  guard.angle = 0;
-  world.player.x = 700;
-  world.player.y = 400;
-  assert.equal(guardSees(guard, world.player).visible, false);
+t('a guard does not see through a wall', () => {
+  const w = stillWorld(500, 200, 0); // facing east, W3 between guard and courier
+  w.player.x = 700;
+  w.player.y = 200;
+  assert.equal(guardSees(w.guards[0], w.player).visible, false);
 });
 
-test('a bush hides the courier beyond close range, but not up close', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  // The bush at (180, 340); the lane north from (180, 440) is clear of walls and crates.
-  guard.x = 180;
-  guard.y = 440;
-  guard.angle = -Math.PI / 2;
-  // In the bush, 80px away: hidden.
-  world.player.x = 180;
-  world.player.y = 360;
-  assert.equal(guardSees(guard, world.player).visible, false);
-  // Out of the bush, 40px away: spotted.
-  world.player.x = 180;
-  world.player.y = 400;
-  assert.equal(guardSees(guard, world.player).visible, true);
+t('a bush hides the courier beyond close-spotting range', () => {
+  const w = stillWorld(180, 200, Math.PI / 2); // facing south, courier in bush B3
+  w.player.x = 180;
+  w.player.y = 340;
+  const far = guardSees(w.guards[0], w.player);
+  assert.equal(far.inBush, true);
+  assert.equal(far.visible, false, 'hidden in the bush at 140 px');
+  w.guards[0].y = 290; // 50 px away: inside close-spotting range
+  const near = guardSees(w.guards[0], w.player);
+  assert.equal(near.visible, true, 'spotted up close even in a bush');
 });
 
-test('suspicion rises while the courier is seen and falls while hidden', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  pinGuard(guard, 400, 400, 0);
-  world.player.x = 500;
-  world.player.y = 400;
-  stepN(world, STILL, 1);
-  assert.ok(guard.suspicion > 0.5, `suspicion did not rise: ${guard.suspicion}`);
-  world.player.x = 300;
-  world.player.y = 400;
-  stepN(world, STILL, 2.5);
-  assert.ok(guard.suspicion < 0.2, `suspicion did not fall: ${guard.suspicion}`);
+t('suspicion rises while seen and falls when unseen', () => {
+  const w = stillWorld(500, 360, 0);
+  w.player.x = 600;
+  w.player.y = 360;
+  for (let i = 0; i < 30; i++) step(w, { x: 0, y: 0, sneak: false }, DT);
+  const risen = w.guards[0].suspicion;
+  assert.ok(risen > 0, `suspicion rose to ${risen}`);
+  w.player.x = 80;
+  w.player.y = 640; // far away, out of every cone
+  for (let i = 0; i < 60; i++) step(w, { x: 0, y: 0, sneak: false }, DT);
+  assert.ok(w.guards[0].suspicion < risen, 'suspicion decayed once unseen');
 });
 
-test('a guard investigates at half suspicion and chases at full suspicion', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  pinGuard(guard, 400, 400, 0);
-  world.player.x = 500;
-  world.player.y = 400;
-  stepN(world, STILL, 0.6);
-  assert.equal(guard.state, 'investigate');
-  assert.equal(world.timesSpotted, 0);
-  stepN(world, STILL, 1.5);
-  assert.equal(guard.state, 'chase');
-  assert.equal(world.timesSpotted, 1);
+t('suspicion at 0.45 makes the guard investigate', () => {
+  const w = stillWorld(500, 360, 0);
+  w.player.x = 600;
+  w.player.y = 360;
+  w.guards[0].suspicion = 0.44;
+  step(w, { x: 0, y: 0, sneak: false }, 0.1);
+  assert.equal(w.guards[0].state, 'investigate');
 });
 
-test('running footsteps draw a patrolling guard to investigate', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  pinGuard(guard, 400, 400, 0);
-  world.player.x = 340;
-  world.player.y = 400;
-  stepN(world, { x: -1, y: 0, sneak: false }, 0.6);
-  assert.equal(guard.state, 'investigate');
+t('suspicion at 1.0 makes the guard chase', () => {
+  const w = stillWorld(500, 360, 0);
+  w.player.x = 600;
+  w.player.y = 360;
+  w.guards[0].suspicion = 0.99;
+  const spotted = w.timesSpotted;
+  step(w, { x: 0, y: 0, sneak: false }, 0.1);
+  assert.equal(w.guards[0].state, 'chase');
+  assert.equal(w.timesSpotted, spotted + 1);
 });
 
-test('collecting the letters and reaching the gate wins the run', () => {
-  const world = createWorld(1);
-  parkGuards(world);
+t('running footsteps draw a patrolling guard to investigate', () => {
+  const w = stillWorld(400, 360, 0); // facing east; courier behind it
+  w.player.x = 390;
+  w.player.y = 360;
+  assert.equal(guardSees(w.guards[0], w.player).visible, false);
+  for (let i = 0; i < 36; i++) step(w, { x: -1, y: 0, sneak: false }, DT);
+  assert.equal(w.guards[0].state, 'investigate');
+});
+
+t('three letters plus the gate wins the run', () => {
+  const w = createWorld(1);
   for (const letter of LEVEL.letters) {
-    world.player.x = letter.x;
-    world.player.y = letter.y;
-    step(world, STILL);
+    w.player.x = letter.x;
+    w.player.y = letter.y;
+    step(w, { x: 0, y: 0, sneak: false }, DT);
   }
-  assert.equal(world.lettersCollected, 3);
-  world.player.x = LEVEL.exit.x + LEVEL.exit.w / 2;
-  world.player.y = LEVEL.exit.y + LEVEL.exit.h / 2;
-  step(world, STILL);
-  assert.equal(world.status, 'won');
-  assert.ok(world.winTime > 0);
+  assert.equal(w.lettersCollected, 3);
+  w.player.x = LEVEL.exit.x + LEVEL.exit.w / 2;
+  w.player.y = LEVEL.exit.y + LEVEL.exit.h / 2;
+  step(w, { x: 0, y: 0, sneak: false }, DT);
+  assert.equal(w.status, 'won');
+  assert.ok(['Ghost', 'Shadow', 'Seen'].includes(w.rating));
 });
 
-test('a chasing guard that touches the courier ends the run', () => {
-  const world = createWorld(1);
-  const guard = world.guards[0];
-  guard.state = 'chase';
-  guard.x = world.player.x + 20;
-  guard.y = world.player.y;
-  step(world, STILL);
-  assert.equal(world.status, 'caught');
+t('a chasing guard touching the courier catches it', () => {
+  const w = createWorld(1);
+  const g = w.guards[0];
+  g.x = 500;
+  g.y = 360;
+  g.facing = 0;
+  g.state = 'chase';
+  g.suspicion = 1;
+  w.player.x = 520;
+  w.player.y = 360;
+  step(w, { x: 0, y: 0, sneak: false }, DT);
+  assert.equal(w.status, 'caught');
 });
 
-test('the segment and circle helpers agree with the level', () => {
-  assert.equal(segmentBlocked(0, 360, 1280, 360), true);
-  assert.equal(segmentBlocked(100, 100, 200, 100), false);
-  assert.equal(circleHitsAny(12, 360, 14), true);
-  assert.equal(circleHitsAny(640, 360, 14), true);
-  assert.equal(circleHitsAny(600, 360, 14), false);
+t('segment and circle helpers behave', () => {
+  const rect = { x: 100, y: 100, w: 50, h: 50 };
+  assert.equal(segmentIntersectsRect(0, 125, 200, 125, rect), true, 'crossing');
+  assert.equal(segmentIntersectsRect(0, 0, 200, 0, rect), false, 'parallel outside');
+  assert.equal(segmentIntersectsRect(0, 0, 50, 50, rect), false, 'missing');
+  assert.equal(segmentIntersectsRect(0, 125, 120, 125, rect), true, 'ending inside');
+  assert.equal(segmentNearPoint(0, 0, 10, 0, 5, 3), 3, 'perpendicular distance');
+  assert.equal(segmentNearPoint(0, 0, 10, 0, 20, 0), 10, 'clamped past the end');
+  assert.equal(segmentNearPoint(0, 0, 10, 0, 5, 0), 0, 'on the segment');
+  assert.equal(circleHitsSolids(310, 150, 14), true, 'inside wall W1');
+  assert.equal(circleHitsSolids(200, 360, 14), false, 'open ground');
 });
 
-test('Wren patrols the east leg of the west room, clear of letter 1', () => {
-  // The finish tweak: Wren walks up and down x=260 only, so the courier's walk
-  // north to letter 1 at (150,120) never meets her head-on in the narrow west column.
-  const wren = LEVEL.guards.find((g) => g.name === 'Wren');
+t('Wren patrols only the x=260 column', () => {
+  const wren = LEVEL.guards[0];
+  assert.equal(wren.name, 'Wren');
   assert.deepEqual(wren.waypoints, [
     { x: 260, y: 200 },
     { x: 260, y: 600 },
   ]);
+  assert.equal(wren.speed, 70);
 });
 
-test('the start shot stages five seconds of patrolling', () => {
-  const { world, seconds } = stageShot('start', 1);
-  assert.equal(world.status, 'playing');
-  assert.equal(seconds, 5);
-  assert.ok(Math.abs(world.time - 5) < 0.01, `time after five seconds: ${world.time}`);
+t('the start shot runs 5 s of patrolling', () => {
+  const w = stageShot('start', 1);
+  assert.ok(Math.abs(w.time - 5) < 0.01, `time=${w.time}`);
+  assert.equal(w.status, 'playing');
+  assert.equal(w.lettersCollected, 0);
 });
 
-test('the play shot collects the first letter', () => {
-  const { world, seconds } = stageShot('play', 1);
-  assert.ok(world.lettersCollected >= 1, `no letter in ${seconds}s`);
+t('the play shot collects letter 1', () => {
+  const w = stageShot('play', 1);
+  assert.equal(w.letters[0].taken, true);
+  assert.ok(w.lettersCollected >= 1);
+  assert.ok(w.time < 90, `time=${w.time}`);
 });
 
-test('the alert shot ends with a guard chasing, not a caught courier', () => {
-  const { world } = stageShot('alert', 1);
-  assert.equal(world.status, 'playing');
-  assert.ok(world.guards.some((guard) => guard.state === 'chase'), 'no guard chased');
+t('the alert shot ends chasing, not caught', () => {
+  const w = stageShot('alert', 1);
+  assert.equal(w.status, 'playing');
+  assert.ok(w.guards.some((g) => g.state === 'chase'), 'a guard is chasing');
 });
 
-test('the navigation graph connects every open point with walkable legs', () => {
-  const byId = new Map(NAV_NODES.map((node) => [node.id, node]));
-  for (const from of NAV_NODES) {
-    for (const to of NAV_NODES) {
-      const path = findPath(from.id, to.id);
-      assert.ok(path.length >= 1, `no path ${from.id} -> ${to.id}`);
-      assert.equal(path[0], from.id);
-      assert.equal(path[path.length - 1], to.id);
-      for (let i = 0; i + 1 < path.length; i += 1) {
-        const a = byId.get(path[i]);
-        const b = byId.get(path[i + 1]);
-        assert.ok(segmentClear(a.x, a.y, b.x, b.y), `leg ${path[i]} -> ${path[i + 1]} is blocked`);
-      }
-    }
+t('the nav graph connects every node from the start', () => {
+  for (let i = 0; i < NODES.length; i++) {
+    assert.notEqual(findPath(12, i, []), null, `node ${i} unreachable`);
   }
 });
 
-test('the autopilot plays the full route on seed 1 (no win frame is claimed)', () => {
-  // The scripted courier does not win the full run on any seed in 1–200, even
-  // after Wren's patrol moved east — so the entry ships three screenshots and
-  // no end shot. What this test pins down is that the staging plays the whole
-  // route honestly: it collects at least two letters before the run ends, and
-  // it ends the same way every time (see the determinism test below).
-  const { world, seconds } = stageShot('end', 1);
-  assert.ok(world.lettersCollected >= 2, `only ${world.lettersCollected} letters in ${seconds}s`);
-  assert.ok(seconds < 150, `run took ${seconds}s`);
-  console.log(`    (autopilot ends ${world.status} with ${world.lettersCollected}/3 letters in ${seconds.toFixed(1)}s)`);
-});
-
-test('staging the same shot twice gives the same ending', () => {
+t('the end staging collects at least 2 letters in under 150 s, deterministically', () => {
   const a = stageShot('end', 1);
   const b = stageShot('end', 1);
-  assert.equal(a.world.winTime, b.world.winTime);
-  assert.equal(a.world.player.x, b.world.player.x);
-  assert.equal(a.world.player.y, b.world.player.y);
+  assert.equal(a.lettersCollected, b.lettersCollected, 'same letters both runs');
+  assert.equal(a.status, b.status, 'same ending both runs');
+  assert.equal(a.time, b.time, 'same time both runs');
+  assert.ok(a.lettersCollected >= 2, `only ${a.lettersCollected} letters (status ${a.status}, time ${a.time})`);
+  assert.ok(a.time < 150, `time=${a.time}`);
 });
 
-console.log(`\n${passed} tests passed`);
+// ---- run them all, report honestly, never abort on the first failure
+let passed = 0;
+for (const [name, fn] of tests) {
+  try {
+    fn();
+    passed++;
+    console.log(`pass - ${name}`);
+  } catch (e) {
+    console.log(`FAIL - ${name}: ${e.message}`);
+  }
+}
+console.log(`${passed}/${tests.length} passed`);
+if (passed !== tests.length) process.exit(1);

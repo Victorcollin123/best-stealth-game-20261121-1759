@@ -3,27 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Night Post — a stealth game</title>
+<title>Night Post — a top-down stealth game</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #0b0e14; color: #eef1f5;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
-  h1 { margin: 18px 0 4px; font-size: 22px; letter-spacing: 0.04em; }
-  p { margin: 0 0 14px; color: #9aa3b5; font-size: 14px; }
-  canvas { width: min(1280px, 96vw); height: auto; display: block;
-    border: 1px solid #39415a; border-radius: 8px; background: #1c2129; }
-  footer { margin: 12px 0 20px; color: #9aa3b5; font-size: 13px; text-align: center; }
-  footer b { color: #eef1f5; }
+  html, body { margin: 0; padding: 0; background: #050810; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  canvas { display: block; width: min(1280px, 100vw); height: auto; image-rendering: auto; }
 </style>
 </head>
 <body>
-<h1>Night Post</h1>
-<p>Three letters. One courtyard. Three guards who never sleep.</p>
 <canvas id="game" width="1280" height="720"></canvas>
-<footer>
-  <b>WASD / arrows</b> move &nbsp;·&nbsp; <b>Shift</b> sneak &nbsp;·&nbsp; <b>P</b> pause &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; <b>R</b> restart<br>
-  Hide in the bushes. Lamplight and running make you easier to spot. Reach the green gate with all three letters.
-</footer>
-<script type="module" src="./src/main.js"></script>
+<script type="module" src="./main.js"></script>
 </body>
 </html>

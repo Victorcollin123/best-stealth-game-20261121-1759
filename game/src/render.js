@@ -1,328 +1,316 @@
-// Night Post: everything the player sees, drawn on one canvas. The camera is
-// fixed on the whole 1280x720 courtyard — a stealth game reads better when the
-// whole level is in view than when the screen scrolls. Vision cones are
-// raycast so they stop at walls, which is what makes the hiding spots readable
-// at a glance.
+// Night Post — canvas rendering. Draws the courtyard from a world: ground,
+// lamps, exit gate, bushes, crates, walls, letters, guards with raycast
+// vision cones, the courier, and the HUD / screens on top. No simulation
+// lives here; it only paints what the world says.
 
-import { FIELD, GUARD, PALETTE, FONT, LETTERS_TO_WIN } from './config.js';
-import { LEVEL } from './level.js';
-import { circleHitsAny } from './world.js';
+import { FIELD, PALETTE } from './config.js';
+import { LEVEL, solids } from './level.js';
 
-function coneColor(guard) {
-  if (guard.state === 'chase') return PALETTE.coneAlert;
-  if (guard.state === 'investigate' || guard.suspicion >= 0.45) return PALETTE.coneSuspicious;
-  return PALETTE.cone;
-}
-
-/** Walk a ray from the guard until it hits a wall or the vision range, cone edge by edge. */
-function conePolygon(guard) {
-  const points = [{ x: guard.x, y: guard.y }];
-  const rays = 24;
-  for (let i = 0; i <= rays; i += 1) {
-    const angle = guard.angle - GUARD.visionHalfAngle + (2 * GUARD.visionHalfAngle * i) / rays;
-    let endX = guard.x + Math.cos(angle) * GUARD.visionRange;
-    let endY = guard.y + Math.sin(angle) * GUARD.visionRange;
-    for (let t = 8; t <= GUARD.visionRange; t += 8) {
-      const px = guard.x + Math.cos(angle) * t;
-      const py = guard.y + Math.sin(angle) * t;
-      if (circleHitsAny(px, py, 2)) {
-        endX = px;
-        endY = py;
-        break;
-      }
-    }
-    points.push({ x: endX, y: endY });
-  }
-  return points;
-}
-
-function drawFloor(ctx) {
-  ctx.fillStyle = PALETTE.floor;
-  ctx.fillRect(0, 0, FIELD.width, FIELD.height);
-  const tile = 40;
-  ctx.fillStyle = PALETTE.floorDark;
-  for (let y = 0; y < FIELD.height / tile; y += 1) {
-    for (let x = 0; x < FIELD.width / tile; x += 1) {
-      if ((x + y) % 2 === 0) ctx.fillRect(x * tile, y * tile, tile, tile);
+/** Ray vs rect (slab method): distance along the ray, or Infinity. */
+export function rayHitRect(ox, oy, dx, dy, rect) {
+  let tmin = 0;
+  let tmax = Infinity;
+  const slabs = [
+    [dx, ox, rect.x, rect.x + rect.w],
+    [dy, oy, rect.y, rect.y + rect.h],
+  ];
+  for (const [d, o, lo, hi] of slabs) {
+    if (Math.abs(d) < 1e-9) {
+      if (o < lo || o > hi) return Infinity;
+    } else {
+      let t1 = (lo - o) / d;
+      let t2 = (hi - o) / d;
+      if (t1 > t2) [t1, t2] = [t2, t1];
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return Infinity;
     }
   }
-  ctx.strokeStyle = PALETTE.tileLine;
-  ctx.lineWidth = 1;
+  return tmin;
+}
+
+/** Nearest wall hit along a ray, capped at maxDist. */
+export function raycast(ox, oy, angle, maxDist) {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  let best = maxDist;
+  for (const s of solids()) {
+    const t = rayHitRect(ox, oy, dx, dy, s);
+    if (t < best) best = t;
+  }
+  return best;
+}
+
+function drawCone(ctx, guard, visionRange, halfAngle) {
+  const rays = 26;
+  const chasing = guard.state === 'chase';
   ctx.beginPath();
-  for (let x = 0; x <= FIELD.width; x += tile) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, FIELD.height);
+  ctx.moveTo(guard.x, guard.y);
+  for (let i = 0; i <= rays; i++) {
+    const a = guard.facing - halfAngle + (2 * halfAngle * i) / rays;
+    const d = raycast(guard.x, guard.y, a, visionRange);
+    ctx.lineTo(guard.x + Math.cos(a) * d, guard.y + Math.sin(a) * d);
   }
-  for (let y = 0; y <= FIELD.height; y += tile) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(FIELD.width, y);
-  }
+  ctx.closePath();
+  ctx.fillStyle = chasing ? PALETTE.coneChase : PALETTE.cone;
+  ctx.fill();
+  ctx.strokeStyle = chasing ? PALETTE.coneChaseEdge : PALETTE.coneEdge;
+  ctx.lineWidth = 1;
   ctx.stroke();
 }
 
-function drawLamps(ctx) {
-  for (const lamp of LEVEL.lamps) {
-    const gradient = ctx.createRadialGradient(lamp.x, lamp.y, 6, lamp.x, lamp.y, lamp.r);
-    gradient.addColorStop(0, 'rgba(242, 201, 76, 0.30)');
-    gradient.addColorStop(1, 'rgba(242, 201, 76, 0)');
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(lamp.x, lamp.y, lamp.r, 0, Math.PI * 2);
-    ctx.fill();
-    // The lamp post itself.
-    ctx.fillStyle = '#2a2f3a';
-    ctx.fillRect(lamp.x - 3, lamp.y - 3, 6, 6);
-    ctx.fillStyle = PALETTE.lampGlow;
-    ctx.beginPath();
-    ctx.arc(lamp.x, lamp.y, 5, 0, Math.PI * 2);
-    ctx.fill();
+function drawGuard(ctx, guard) {
+  drawCone(ctx, guard, 230, 0.6);
+  // body
+  ctx.beginPath();
+  ctx.arc(guard.x, guard.y, 14, 0, Math.PI * 2);
+  ctx.fillStyle = PALETTE.guard;
+  ctx.fill();
+  ctx.strokeStyle = PALETTE.guardEdge;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // facing tick
+  ctx.beginPath();
+  ctx.moveTo(guard.x, guard.y);
+  ctx.lineTo(guard.x + Math.cos(guard.facing) * 20, guard.y + Math.sin(guard.facing) * 20);
+  ctx.strokeStyle = PALETTE.guardEdge;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // suspicion bar
+  if (guard.suspicion > 0.02) {
+    const w = 30;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(guard.x - w / 2, guard.y - 30, w, 5);
+    ctx.fillStyle = guard.suspicion >= 1 ? PALETTE.danger : PALETTE.gold;
+    ctx.fillRect(guard.x - w / 2, guard.y - 30, w * guard.suspicion, 5);
   }
+  // name
+  ctx.fillStyle = PALETTE.dim;
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(guard.name, guard.x, guard.y + 30);
 }
 
-function drawBushes(ctx) {
-  for (const bush of LEVEL.bushes) {
-    ctx.fillStyle = PALETTE.bush;
-    ctx.beginPath();
-    ctx.arc(bush.x, bush.y, bush.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = PALETTE.bushLight;
-    for (const [ox, oy, r] of [[-12, -8, 9], [10, -12, 8], [12, 10, 9], [-10, 12, 7], [0, 0, 8]]) {
-      ctx.beginPath();
-      ctx.arc(bush.x + ox, bush.y + oy, r, 0, Math.PI * 2);
-      ctx.fill();
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/**
+ * Paint one frame. ui: { screen, bestTime, muted } where screen is
+ * 'title' | 'playing' | 'paused' | 'won' | 'caught'.
+ */
+export function render(ctx, world, ui) {
+  const W = FIELD.w;
+  const H = FIELD.h;
+  ctx.clearRect(0, 0, W, H);
+
+  // ground, with a faint checker of paving
+  ctx.fillStyle = PALETTE.ground;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = PALETTE.groundAlt;
+  for (let y = 24; y < H - 24; y += 96) {
+    for (let x = 24 + ((y / 96) % 2) * 48; x < W - 24; x += 96) {
+      ctx.fillRect(x, y, 48, 48);
     }
   }
-}
 
-function drawWalls(ctx) {
+  // lamp glow
+  for (const lamp of LEVEL.lamps) {
+    ctx.beginPath();
+    ctx.arc(lamp.x, lamp.y, lamp.r, 0, Math.PI * 2);
+    ctx.fillStyle = PALETTE.lamp;
+    ctx.fill();
+    ctx.strokeStyle = PALETTE.lampEdge;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(lamp.x, lamp.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = PALETTE.gold;
+    ctx.fill();
+  }
+
+  // exit gate
+  const e = LEVEL.exit;
+  ctx.fillStyle = PALETTE.exit;
+  ctx.fillRect(e.x, e.y, e.w, e.h);
+  ctx.strokeStyle = PALETTE.exitEdge;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(e.x, e.y, e.w, e.h);
+  ctx.fillStyle = '#d7ffd7';
+  ctx.font = 'bold 12px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('GATE', e.x + e.w / 2, e.y + e.h / 2 + 4);
+
+  // bushes
+  for (const b of LEVEL.bushes) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = PALETTE.bush;
+    ctx.fill();
+    ctx.strokeStyle = PALETTE.bushEdge;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(b.x - 10, b.y - 8, 9, 0, Math.PI * 2);
+    ctx.arc(b.x + 11, b.y + 6, 11, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(47, 122, 62, 0.5)';
+    ctx.fill();
+  }
+
+  // crates
+  for (const c of LEVEL.crates) {
+    ctx.fillStyle = PALETTE.crate;
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = PALETTE.crateEdge;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    ctx.beginPath();
+    ctx.moveTo(c.x, c.y);
+    ctx.lineTo(c.x + c.w, c.y + c.h);
+    ctx.moveTo(c.x + c.w, c.y);
+    ctx.lineTo(c.x, c.y + c.h);
+    ctx.stroke();
+  }
+
+  // walls
   for (const wall of LEVEL.walls) {
     ctx.fillStyle = PALETTE.wall;
     ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
     ctx.fillStyle = PALETTE.wallTop;
-    ctx.fillRect(wall.x, wall.y, wall.w, 4);
+    ctx.fillRect(wall.x, wall.y, wall.w, Math.min(4, wall.h));
   }
-  for (const crate of LEVEL.crates) {
-    ctx.fillStyle = PALETTE.crate;
-    ctx.fillRect(crate.x, crate.y, crate.w, crate.h);
-    ctx.fillStyle = PALETTE.crateTop;
-    ctx.fillRect(crate.x, crate.y, crate.w, 4);
-    ctx.strokeStyle = '#3d2f21';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(crate.x, crate.y + crate.h / 2);
-    ctx.lineTo(crate.x + crate.w, crate.y + crate.h / 2);
-    ctx.moveTo(crate.x + crate.w / 2, crate.y);
-    ctx.lineTo(crate.x + crate.w / 2, crate.y + crate.h);
-    ctx.stroke();
-  }
-}
 
-function drawLetters(ctx, world) {
+  // letters (from the world, so a collected letter stops being drawn)
   for (const letter of world.letters) {
     if (letter.taken) continue;
-    const bob = Math.sin(world.time * 3 + letter.x) * 3;
-    const y = letter.y + bob;
-    ctx.save();
-    ctx.translate(letter.x, y);
-    ctx.rotate(-0.12);
     ctx.fillStyle = PALETTE.letter;
-    ctx.fillRect(-11, -8, 22, 16);
-    ctx.strokeStyle = '#b39b4a';
-    ctx.lineWidth = 1.5;
+    ctx.fillRect(letter.x - 11, letter.y - 8, 22, 16);
+    ctx.strokeStyle = PALETTE.letterEdge;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(letter.x - 11, letter.y - 8, 22, 16);
     ctx.beginPath();
-    ctx.moveTo(-11, -8);
-    ctx.lineTo(0, 2);
-    ctx.lineTo(11, -8);
+    ctx.moveTo(letter.x - 11, letter.y - 8);
+    ctx.lineTo(letter.x, letter.y + 2);
+    ctx.lineTo(letter.x + 11, letter.y - 8);
     ctx.stroke();
-    ctx.restore();
   }
-}
 
-function drawExit(ctx, world) {
-  const exit = LEVEL.exit;
-  const open = world.lettersCollected >= LETTERS_TO_WIN;
-  ctx.fillStyle = open ? PALETTE.exit : PALETTE.exitDark;
-  ctx.fillRect(exit.x, exit.y, exit.w, exit.h);
-  ctx.fillStyle = '#0b0e14';
-  ctx.font = `bold 11px ${FONT}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(open ? 'EXIT' : `${world.lettersCollected}/${LETTERS_TO_WIN}`, exit.x + exit.w / 2, exit.y + exit.h / 2);
-  if (open) {
-    ctx.strokeStyle = 'rgba(126, 231, 135, 0.5)';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(exit.x - 4, exit.y - 4, exit.w + 8, exit.h + 8);
-  }
-}
+  // guards, then the courier
+  for (const g of world.guards) drawGuard(ctx, g);
 
-function drawCones(ctx, world) {
-  for (const guard of world.guards) {
-    const polygon = conePolygon(guard);
-    ctx.fillStyle = coneColor(guard);
-    ctx.beginPath();
-    ctx.moveTo(polygon[0].x, polygon[0].y);
-    for (let i = 1; i < polygon.length; i += 1) ctx.lineTo(polygon[i].x, polygon[i].y);
-    ctx.closePath();
-    ctx.fill();
-  }
-}
-
-function drawGuard(ctx, guard) {
-  ctx.fillStyle = PALETTE.guard;
+  const p = world.player;
   ctx.beginPath();
-  ctx.arc(guard.x, guard.y, GUARD.radius, 0, Math.PI * 2);
+  ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+  ctx.fillStyle = PALETTE.playerCoat;
   ctx.fill();
-  ctx.strokeStyle = PALETTE.guardDark;
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  // The direction the guard is facing.
-  ctx.strokeStyle = '#f5d0cb';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(guard.x, guard.y);
-  ctx.lineTo(guard.x + Math.cos(guard.angle) * (GUARD.radius + 8), guard.y + Math.sin(guard.angle) * (GUARD.radius + 8));
-  ctx.stroke();
-  // Suspicion: a "?" while it wonders, a "!" once it is sure.
-  if (guard.state === 'chase') {
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold 20px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('!', guard.x, guard.y - 26);
-  } else if (guard.suspicion >= 0.45) {
-    ctx.fillStyle = '#ffd9a0';
-    ctx.font = `bold 18px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('?', guard.x, guard.y - 26);
-  }
-  // A thin suspicion meter above the guard.
-  if (guard.suspicion > 0.05) {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-    ctx.fillRect(guard.x - 16, guard.y - 40, 32, 5);
-    ctx.fillStyle = guard.suspicion >= 1 ? PALETTE.danger : PALETTE.gold;
-    ctx.fillRect(guard.x - 16, guard.y - 40, 32 * guard.suspicion, 5);
-  }
-}
-
-function drawPlayer(ctx, world) {
-  const player = world.player;
-  const radius = player.sneaking ? 12 : 14;
-  ctx.fillStyle = player.sneaking ? PALETTE.playerDark : PALETTE.player;
-  ctx.beginPath();
-  ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#d6f2ff';
+  ctx.strokeStyle = PALETTE.player;
   ctx.lineWidth = 2;
   ctx.stroke();
-  ctx.strokeStyle = '#d6f2ff';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(player.x, player.y);
-  ctx.lineTo(player.x + Math.cos(player.angle) * (radius + 7), player.y + Math.sin(player.angle) * (radius + 7));
-  ctx.stroke();
-}
+  // satchel
+  ctx.fillStyle = PALETTE.letter;
+  ctx.fillRect(p.x - 4, p.y - 3, 9, 7);
+  if (p.sneaking) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 19, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(232,232,232,0.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
-function formatTime(seconds) {
-  const total = Math.floor(seconds);
-  const minutes = Math.floor(total / 60);
-  const secs = total % 60;
-  return `${minutes}:${String(secs).padStart(2, '0')}`;
-}
-
-function drawHud(ctx, world, ui) {
-  ctx.fillStyle = 'rgba(11, 14, 20, 0.72)';
-  ctx.fillRect(0, 0, FIELD.width, 40);
-  ctx.fillStyle = PALETTE.text;
-  ctx.font = `600 16px ${FONT}`;
+  // ---- HUD
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(`Letters  ${world.lettersCollected}/${LETTERS_TO_WIN}`, 16, 21);
-  ctx.textAlign = 'center';
-  const alert = world.guards.some((g) => g.state === 'chase');
-  const wary = world.guards.some((g) => g.state === 'investigate' || g.suspicion >= 0.45);
-  if (alert) {
+  ctx.font = 'bold 16px system-ui, sans-serif';
+  ctx.fillStyle = PALETTE.text;
+  const mins = Math.floor(world.time / 60);
+  const secs = Math.floor(world.time % 60)
+    .toString()
+    .padStart(2, '0');
+  ctx.fillText(`Letters ${world.lettersCollected}/3    ${mins}:${secs}`, 36, 52);
+  if (ui.bestTime != null) {
+    ctx.fillStyle = PALETTE.dim;
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.fillText(`Best ${ui.bestTime}`, 36, 74);
+  }
+  if (ui.muted) {
+    ctx.fillStyle = PALETTE.dim;
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('Muted (M)', W - 36, 52);
+  }
+  const chasing = world.guards.some((g) => g.state === 'chase');
+  if (world.status === 'playing' && chasing) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 30px system-ui, sans-serif';
     ctx.fillStyle = PALETTE.danger;
-    ctx.fillText('SPOTTED — RUN!', FIELD.width / 2, 21);
-  } else if (wary) {
+    ctx.fillText('SPOTTED — RUN!', W / 2, 132); // below the HUD and the north letters
+  }
+
+  // ---- screens
+  if (ui.screen === 'title') {
+    ctx.fillStyle = 'rgba(5, 8, 16, 0.72)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = PALETTE.text;
+    ctx.font = 'bold 64px system-ui, sans-serif';
+    ctx.fillText('NIGHT POST', W / 2, 250);
+    ctx.font = '20px system-ui, sans-serif';
     ctx.fillStyle = PALETTE.gold;
-    ctx.fillText('Something stirs…', FIELD.width / 2, 21);
-  } else {
-    ctx.fillStyle = PALETTE.muted;
-    ctx.fillText('Stay out of the light', FIELD.width / 2, 21);
-  }
-  ctx.fillStyle = PALETTE.text;
-  ctx.textAlign = 'right';
-  const best = ui.best == null ? '—' : formatTime(ui.best);
-  ctx.fillText(`${formatTime(world.time)}   Best ${best}`, FIELD.width - 16, 21);
-}
-
-function drawTitle(ctx, world, ui) {
-  ctx.fillStyle = 'rgba(11, 14, 20, 0.78)';
-  ctx.fillRect(0, 0, FIELD.width, FIELD.height);
-  ctx.fillStyle = PALETTE.gold;
-  ctx.font = `800 64px ${FONT}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('NIGHT POST', FIELD.width / 2, 240);
-  ctx.fillStyle = PALETTE.text;
-  ctx.font = `400 22px ${FONT}`;
-  ctx.fillText('Three letters. One courtyard. Three guards who never sleep.', FIELD.width / 2, 300);
-  ctx.fillStyle = PALETTE.muted;
-  ctx.font = `400 17px ${FONT}`;
-  ctx.fillText('WASD / arrows to move · hold Shift to sneak · hide in the bushes', FIELD.width / 2, 344);
-  ctx.fillText('Lamplight and running make you easier to spot · reach the green gate with all three letters', FIELD.width / 2, 372);
-  ctx.fillStyle = PALETTE.text;
-  ctx.font = `600 22px ${FONT}`;
-  ctx.fillText('Press Enter to begin', FIELD.width / 2, 440);
-  if (ui.best != null) {
-    ctx.fillStyle = PALETTE.muted;
-    ctx.font = `400 16px ${FONT}`;
-    ctx.fillText(`Best delivery: ${formatTime(ui.best)}`, FIELD.width / 2, 480);
-  }
-}
-
-function drawEnd(ctx, world, ui) {
-  ctx.fillStyle = 'rgba(11, 14, 20, 0.78)';
-  ctx.fillRect(0, 0, FIELD.width, FIELD.height);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  if (world.status === 'won') {
-    const rating = world.timesSpotted === 0 ? 'Ghost — never seen' : world.timesSpotted === 1 ? 'Shadow — seen once' : `Seen ${world.timesSpotted} times`;
-    ctx.fillStyle = PALETTE.exit;
-    ctx.font = `800 56px ${FONT}`;
-    ctx.fillText('DELIVERED', FIELD.width / 2, 260);
+    ctx.fillText('Three letters. Three guards. One gate. Unseen.', W / 2, 300);
+    ctx.fillStyle = PALETTE.dim;
+    ctx.font = '17px system-ui, sans-serif';
+    ctx.fillText('WASD / arrows to move · Shift to sneak · P pause · M mute · R restart', W / 2, 350);
+    ctx.fillText('Hide in bushes. Mind the lamps. Running is loud.', W / 2, 380);
     ctx.fillStyle = PALETTE.text;
-    ctx.font = `400 22px ${FONT}`;
-    ctx.fillText(`All three letters, in ${formatTime(world.winTime || 0)}. ${rating}.`, FIELD.width / 2, 320);
-  } else {
+    ctx.font = 'bold 22px system-ui, sans-serif';
+    ctx.fillText('Press Enter to start', W / 2, 440);
+    if (ui.bestTime != null) {
+      ctx.fillStyle = PALETTE.dim;
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillText(`Best time: ${ui.bestTime}`, W / 2, 480);
+    }
+  } else if (ui.screen === 'paused') {
+    ctx.fillStyle = 'rgba(5, 8, 16, 0.6)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = PALETTE.text;
+    ctx.font = 'bold 44px system-ui, sans-serif';
+    ctx.fillText('PAUSED', W / 2, H / 2);
+    ctx.font = '18px system-ui, sans-serif';
+    ctx.fillStyle = PALETTE.dim;
+    ctx.fillText('P to resume · R to restart', W / 2, H / 2 + 40);
+  } else if (ui.screen === 'won') {
+    ctx.fillStyle = 'rgba(5, 8, 16, 0.72)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = PALETTE.text;
+    ctx.font = 'bold 56px system-ui, sans-serif';
+    ctx.fillText('DELIVERED', W / 2, 300);
+    ctx.font = '24px system-ui, sans-serif';
+    ctx.fillStyle = PALETTE.gold;
+    ctx.fillText(`Rating: ${world.rating} · Time ${mins}:${secs}`, W / 2, 350);
+    ctx.fillStyle = PALETTE.dim;
+    ctx.font = '18px system-ui, sans-serif';
+    ctx.fillText('Press R to play again', W / 2, 400);
+  } else if (ui.screen === 'caught') {
+    ctx.fillStyle = 'rgba(20, 5, 8, 0.72)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
     ctx.fillStyle = PALETTE.danger;
-    ctx.font = `800 56px ${FONT}`;
-    ctx.fillText('CAUGHT', FIELD.width / 2, 260);
+    ctx.font = 'bold 56px system-ui, sans-serif';
+    ctx.fillText('CAUGHT', W / 2, 300);
     ctx.fillStyle = PALETTE.text;
-    ctx.font = `400 22px ${FONT}`;
-    ctx.fillText(`The courier was caught with ${world.lettersCollected} of ${LETTERS_TO_WIN} letters.`, FIELD.width / 2, 320);
+    ctx.font = '24px system-ui, sans-serif';
+    ctx.fillText(`Letters delivered: ${world.lettersCollected}/3`, W / 2, 350);
+    ctx.fillStyle = PALETTE.dim;
+    ctx.font = '18px system-ui, sans-serif';
+    ctx.fillText('Press R to try again', W / 2, 400);
   }
-  ctx.fillStyle = PALETTE.muted;
-  ctx.font = `400 17px ${FONT}`;
-  if (ui.best != null) ctx.fillText(`Best delivery: ${formatTime(ui.best)}`, FIELD.width / 2, 360);
-  ctx.fillStyle = PALETTE.text;
-  ctx.font = `600 22px ${FONT}`;
-  ctx.fillText('Press R to play again', FIELD.width / 2, 420);
-}
-
-/** Draw the whole scene: floor, light, cover, cones, pieces, HUD, and any screen over it. */
-export function render(ctx, world, ui) {
-  drawFloor(ctx);
-  drawLamps(ctx);
-  drawBushes(ctx);
-  drawWalls(ctx);
-  drawLetters(ctx, world);
-  drawExit(ctx, world);
-  drawCones(ctx, world);
-  for (const guard of world.guards) drawGuard(ctx, guard);
-  drawPlayer(ctx, world);
-  drawHud(ctx, world, ui);
-  if (ui.screen === 'title') drawTitle(ctx, world, ui);
-  if (world.status === 'won' || world.status === 'caught') drawEnd(ctx, world, ui);
 }

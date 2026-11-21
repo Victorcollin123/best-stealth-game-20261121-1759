@@ -1,49 +1,47 @@
-// Night Post: a tiny static server for local play-testing (Node 22, standard
-// library only). Serves this directory on http://localhost:8080 by default, so
-// the game opens at http://localhost:8080/game/ and the screenshot scenes at
-// http://localhost:8080/game/?shot=play&seed=1. `node serve.ts --port 8902`
-// picks a port.
-
+// Night Post — a tiny static server for the game. Serves game/ at the root
+// so the entry plays offline in a desktop browser. Default port 8080;
+// pass --port <n> to choose another. Usage: node serve.ts [--port 8901]
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { join, extname, normalize } from 'node:path';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const portIndex = process.argv.indexOf('--port');
-const port = portIndex >= 0 && process.argv[portIndex + 1] ? Number(process.argv[portIndex + 1]) : 8080;
+const root = join(dirname(fileURLToPath(import.meta.url)), 'game');
+
+let port = 8080;
+const args = process.argv.slice(2);
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--port' && args[i + 1] !== undefined) {
+    port = parseInt(args[i + 1], 10);
+    i++;
+  }
+}
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
-  '.ts': 'text/plain; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.md': 'text/markdown; charset=utf-8',
 };
 
 const server = createServer((req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  let path = normalize(join(here, decodeURIComponent(url.pathname)));
-  if (!path.startsWith(here)) {
-    res.writeHead(403);
-    res.end('Forbidden');
+  const url = new URL(req.url || '/', `http://localhost:${port}`);
+  let path = decodeURIComponent(url.pathname);
+  if (path === '/') path = '/index.html';
+  const file = join(root, path);
+  if (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile()) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('not found\n');
     return;
   }
-  if (existsSync(path) && statSync(path).isDirectory()) path = join(path, 'index.html');
-  if (!existsSync(path) || statSync(path).isDirectory()) {
-    res.writeHead(404);
-    res.end('Not found');
-    return;
-  }
-  res.writeHead(200, { 'content-type': TYPES[extname(path)] ?? 'application/octet-stream' });
-  createReadStream(path).pipe(res);
+  res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' });
+  res.end(readFileSync(file));
 });
 
 server.listen(port, () => {
-  console.log(`Night Post serving at http://localhost:${port}/game/`);
+  console.log(`Night Post serving game/ at http://localhost:${port}/`);
 });

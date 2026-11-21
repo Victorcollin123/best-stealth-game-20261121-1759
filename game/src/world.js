@@ -1,332 +1,353 @@
-// Night Post: the whole simulation, with no browser in it. The renderer only
-// draws this state; the input loop only feeds it a direction and a sneak flag.
-// That split is what lets the game be unit-tested in plain Node and the
-// screenshots be played forward by a script that uses the real rules. Every
-// number comes from config.js.
+// Night Post — the pure simulation. No browser globals here, so the tests can
+// run it in plain Node: createWorld(seed) + step(world, input, dt).
+// Rules: guards see the courier inside a raycast cone with a clear line of
+// sight; suspicion 0..1 (0.45 investigate, 1.0 chase); bushes hide, lamps
+// expose, running feet make noise; caught on touch by a guard that noticed;
+// three letters plus the green gate wins.
 
-import { FIELD, STEP, PLAYER, GUARD, SUSPICION, LETTERS_TO_WIN, LETTER_PICKUP_RADIUS } from './config.js';
-import { LEVEL } from './level.js';
-import { createRandom } from './random.js';
+import { FIELD, PLAYER, GUARD, SUSPICION, LETTER_PICKUP_RADIUS } from './config.js';
+import { LEVEL, solids } from './level.js';
+import { mulberry32 } from './random.js';
 
-/** The solid things: walls plus crates. Bushes and lamps are not solid. */
-export const SOLIDS = [...LEVEL.walls, ...LEVEL.crates];
+// ---------------------------------------------------------------- geometry
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+export function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function wrapAngle(angle) {
-  while (angle > Math.PI) angle -= Math.PI * 2;
-  while (angle < -Math.PI) angle += Math.PI * 2;
-  return angle;
-}
-
-function distance(ax, ay, bx, by) {
-  return Math.hypot(bx - ax, by - ay);
-}
-
-/** True when a circle overlaps a rectangle. */
-export function circleHitsRect(x, y, radius, rect) {
-  const closestX = clamp(x, rect.x, rect.x + rect.w);
-  const closestY = clamp(y, rect.y, rect.y + rect.h);
-  return distance(x, y, closestX, closestY) < radius;
-}
-
-/** True when a circle overlaps any solid rectangle. */
-export function circleHitsAny(x, y, radius, solids = SOLIDS) {
-  for (const rect of solids) {
-    if (circleHitsRect(x, y, radius, rect)) return true;
-  }
-  return false;
-}
-
-/** Move a circle by (dx, dy), sliding along walls: try each axis on its own. */
-export function moveCircle(pos, radius, dx, dy, solids = SOLIDS) {
-  const nextX = pos.x + dx;
-  if (!circleHitsAny(nextX, pos.y, radius, solids)) pos.x = nextX;
-  const nextY = pos.y + dy;
-  if (!circleHitsAny(pos.x, nextY, radius, solids)) pos.y = nextY;
-  return pos;
-}
-
-/** True when the segment from (ax, ay) to (bx, by) crosses a rectangle. */
-export function segmentHitsRect(ax, ay, bx, by, rect) {
-  const dx = bx - ax;
-  const dy = by - ay;
-  let tMin = 0;
-  let tMax = 1;
-  // Liang-Barsky clipping against the rectangle's four sides.
-  const sides = [
-    [-dx, ax - rect.x],
-    [dx, rect.x + rect.w - ax],
-    [-dy, ay - rect.y],
-    [dy, rect.y + rect.h - ay],
-  ];
-  for (const [p, q] of sides) {
-    if (p === 0) {
-      if (q < 0) return false; // Parallel to this side and outside it: the segment misses.
-    } else {
-      const t = q / p;
-      if (p < 0) {
-        if (t > tMax) return false;
-        if (t > tMin) tMin = t;
-      } else {
-        if (t < tMin) return false;
-        if (t < tMax) tMax = t;
-      }
-    }
-  }
-  return tMin <= tMax;
-}
-
-/** True when the segment crosses any solid rectangle. */
-export function segmentBlocked(ax, ay, bx, by, solids = SOLIDS) {
-  for (const rect of solids) {
-    if (segmentHitsRect(ax, ay, bx, by, rect)) return true;
-  }
-  return false;
-}
-
-export function pointInBush(x, y) {
-  return LEVEL.bushes.some((bush) => distance(x, y, bush.x, bush.y) <= bush.r);
-}
-
-export function pointInLamp(x, y) {
-  return LEVEL.lamps.some((lamp) => distance(x, y, lamp.x, lamp.y) <= lamp.r);
-}
-
-export function pointInExit(x, y) {
-  const exit = LEVEL.exit;
-  return x >= exit.x && x <= exit.x + exit.w && y >= exit.y && y <= exit.y + exit.h;
+/** Smallest signed angle from b to a, wrapped to [-PI, PI]. */
+export function angleDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
 }
 
 /**
- * What a guard makes of the courier right now. Visible means the courier is
- * inside the vision cone, within range, with a clear line of sight, and not
- * hidden in a bush beyond the close-spotting range. The returned factors
- * explain the suspicion rate.
+ * Liang-Barsky: does segment (ax,ay)-(bx,by) touch rect {x,y,w,h}?
+ * A segment parallel to an edge and outside the rect is a MISS.
  */
-export function guardSees(guard, player) {
-  const dist = distance(guard.x, guard.y, player.x, player.y);
-  if (dist > GUARD.visionRange) return { visible: false, dist };
-  const angleToPlayer = Math.atan2(player.y - guard.y, player.x - guard.x);
-  if (Math.abs(wrapAngle(angleToPlayer - guard.angle)) > GUARD.visionHalfAngle) {
-    return { visible: false, dist };
+export function segmentIntersectsRect(ax, ay, bx, by, rect) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const p = [-dx, dx, -dy, dy];
+  const q = [ax - rect.x, rect.x + rect.w - ax, ay - rect.y, rect.y + rect.h - ay];
+  let t0 = 0;
+  let t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false; // parallel and outside
+      continue;
+    }
+    const r = q[i] / p[i];
+    if (p[i] < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
   }
-  if (segmentBlocked(guard.x, guard.y, player.x, player.y)) return { visible: false, dist };
-  const inBush = pointInBush(player.x, player.y);
-  if (inBush && dist > GUARD.bushSpotRange) return { visible: false, dist, inBush };
-  return { visible: true, dist, inBush, inLamp: pointInLamp(player.x, player.y) };
+  return true;
 }
 
-/** A fresh world for a seed. The seed only offsets where each guard starts its loop. */
-export function createWorld(seed = 1) {
-  const random = createRandom(seed);
-  const guards = LEVEL.guards.map((def) => {
-    const startIndex = Math.floor(random() * def.waypoints.length);
-    const start = def.waypoints[startIndex];
-    const next = def.waypoints[(startIndex + 1) % def.waypoints.length];
+/** Distance from point (px,py) to segment (ax,ay)-(bx,by); t clamped to [0,1]. */
+export function segmentNearPoint(ax, ay, bx, by, px, py) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx;
+  const cy = ay + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+/** True when the segment is blocked by any solid (optionally inflated by r). */
+export function segmentBlocked(ax, ay, bx, by, inflate = 0) {
+  for (const s of solids()) {
+    const rect =
+      inflate === 0
+        ? s
+        : { x: s.x - inflate, y: s.y - inflate, w: s.w + 2 * inflate, h: s.h + 2 * inflate };
+    if (segmentIntersectsRect(ax, ay, bx, by, rect)) return true;
+  }
+  return false;
+}
+
+/** True when a circle at (x,y) radius r overlaps any solid rect. */
+export function circleHitsSolids(x, y, r) {
+  for (const s of solids()) {
+    const cx = Math.max(s.x, Math.min(x, s.x + s.w));
+    const cy = Math.max(s.y, Math.min(y, s.y + s.h));
+    const dx = x - cx;
+    const dy = y - cy;
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  return false;
+}
+
+/** Move a circle axis by axis so it slides along walls instead of sticking. */
+export function moveCircle(pos, dx, dy, r) {
+  if (dx !== 0 && !circleHitsSolids(pos.x + dx, pos.y, r)) pos.x += dx;
+  if (dy !== 0 && !circleHitsSolids(pos.x, pos.y + dy, r)) pos.y += dy;
+}
+
+export function inBushAt(pos) {
+  return LEVEL.bushes.some((b) => Math.hypot(pos.x - b.x, pos.y - b.y) <= b.r);
+}
+
+export function inLampAt(pos) {
+  return LEVEL.lamps.some((l) => Math.hypot(pos.x - l.x, pos.y - l.y) <= l.r);
+}
+
+// ---------------------------------------------------------------- vision
+
+/**
+ * Does this guard see a courier at pos? Inside the cone, within range, with a
+ * clear line of sight, and not hidden in a bush beyond close-spotting range.
+ * opts.sweep counts a pausing guard's whole scan sweep (its cone swings
+ * +/- scanSpeed * pause while it stands at a waypoint).
+ */
+export function guardSeesAt(guard, pos, opts = {}) {
+  const dx = pos.x - guard.x;
+  const dy = pos.y - guard.y;
+  const d = Math.hypot(dx, dy);
+  const inBush = inBushAt(pos);
+  const inLamp = inLampAt(pos);
+  const result = { visible: false, dist: d, inBush, inLamp };
+  if (d > GUARD.visionRange) return result;
+  let half = GUARD.halfAngle;
+  if (opts.sweep && guard.state === 'patrol' && guard.pauseTimer > 0) {
+    half += GUARD.scanSpeed * GUARD.waypointPause;
+  }
+  if (d > 0.001 && Math.abs(angleDiff(Math.atan2(dy, dx), guard.facing)) > half) return result;
+  if (segmentBlocked(guard.x, guard.y, pos.x, pos.y)) return result;
+  if (inBush && d > GUARD.bushSpotRange) return result;
+  result.visible = true;
+  return result;
+}
+
+/** guardSees(guard, player) — the player object carries x and y. */
+export function guardSees(guard, player) {
+  return guardSeesAt(guard, { x: player.x, y: player.y });
+}
+
+// ---------------------------------------------------------------- world
+
+export function createWorld(seed) {
+  const rng = mulberry32(seed);
+  const guards = LEVEL.guards.map((g) => {
+    const start = Math.floor(rng() * g.waypoints.length);
+    const at = g.waypoints[start];
+    const next = g.waypoints[(start + 1) % g.waypoints.length];
     return {
-      name: def.name,
-      x: start.x,
-      y: start.y,
-      angle: Math.atan2(next.y - start.y, next.x - start.x),
-      waypoints: def.waypoints,
-      waypointIndex: (startIndex + 1) % def.waypoints.length,
-      patrolSpeed: def.speed,
-      state: 'patrol',
+      name: g.name,
+      x: at.x,
+      y: at.y,
+      facing: Math.atan2(next.y - at.y, next.x - at.x),
+      speed: g.speed,
+      waypoints: g.waypoints.map((w) => ({ x: w.x, y: w.y })),
+      waypointIndex: (start + 1) % g.waypoints.length,
+      state: 'patrol', // patrol | investigate | chase
       suspicion: 0,
-      target: null,
       pauseTimer: 0,
-      loseSightTimer: 0,
+      scanDir: 1,
+      lastSeen: null,
+      unseenTimer: 0,
       investigateTimer: 0,
-      scanDirection: 1,
+      atTarget: false,
+      target: null,
     };
   });
   return {
     seed,
     time: 0,
-    status: 'playing', // 'playing' | 'won' | 'caught'
-    player: {
-      x: LEVEL.playerStart.x,
-      y: LEVEL.playerStart.y,
-      angle: -Math.PI / 2,
-      sneaking: false,
-      moving: false,
-    },
-    guards,
-    letters: LEVEL.letters.map((letter) => ({ ...letter, taken: false })),
+    status: 'playing', // playing | won | caught
+    rating: null, // Ghost | Shadow | Seen, once won
+    player: { x: LEVEL.playerStart.x, y: LEVEL.playerStart.y, sneaking: false, moving: false },
+    letters: LEVEL.letters.map((l) => ({ x: l.x, y: l.y, taken: false })),
     lettersCollected: 0,
     timesSpotted: 0,
-    winTime: null,
+    guards,
     noiseTimer: 0,
   };
 }
 
-/** How fast suspicion rises while this guard sees the courier. */
-function suspicionRate(guard, player, seen) {
-  const closeness = 1 - seen.dist / GUARD.visionRange;
-  let rate = SUSPICION.farRate + (SUSPICION.closeRate - SUSPICION.farRate) * closeness;
-  if (seen.inLamp) rate *= SUSPICION.lampMultiplier;
-  if (!player.sneaking && player.moving) rate *= SUSPICION.runMultiplier;
-  if (seen.inBush) rate *= 0.5;
-  return rate;
-}
-
 function nearestWaypointIndex(guard) {
   let best = 0;
-  let bestDist = Infinity;
-  guard.waypoints.forEach((point, index) => {
-    const d = distance(guard.x, guard.y, point.x, point.y);
-    if (d < bestDist) {
-      bestDist = d;
-      best = index;
+  let bestD = Infinity;
+  guard.waypoints.forEach((w, i) => {
+    const d = Math.hypot(w.x - guard.x, w.y - guard.y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
     }
   });
   return best;
 }
 
-function moveGuardToward(guard, target, speed, dt) {
-  const dx = target.x - guard.x;
-  const dy = target.y - guard.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 1) return true;
-  const step = Math.min(speed * dt, dist);
-  guard.angle = Math.atan2(dy, dx);
-  moveCircle(guard, GUARD.radius, (dx / dist) * step, (dy / dist) * step);
-  return dist - step < 8;
+function moveToward(guard, tx, ty, speed, dt) {
+  const dx = tx - guard.x;
+  const dy = ty - guard.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 0.001) return true;
+  const step = speed * dt;
+  if (d <= step) {
+    guard.x = tx;
+    guard.y = ty;
+    return true;
+  }
+  guard.x += (dx / d) * step;
+  guard.y += (dy / d) * step;
+  guard.facing = Math.atan2(dy, dx);
+  return false;
 }
 
-function enterState(guard, state, target = null) {
-  guard.state = state;
-  guard.target = target;
-  if (state === 'investigate') guard.investigateTimer = GUARD.investigateSeconds;
-  if (state === 'chase') guard.loseSightTimer = 0;
-}
-
-/** Advance the world one fixed step. `input` is { x, y, sneak } from the keyboard. */
-export function step(world, input, dt = STEP) {
+/** Advance the world one fixed step. input: {x, y, sneak}. */
+export function step(world, input, dt) {
   if (world.status !== 'playing') return;
-  dt = Math.min(dt, 0.05);
   world.time += dt;
+  const p = world.player;
 
-  // --- The courier -------------------------------------------------------
-  const player = world.player;
-  const magnitude = Math.hypot(input.x, input.y);
-  player.moving = magnitude > 0.01;
-  player.sneaking = Boolean(input.sneak);
-  if (player.moving) {
-    const speed = player.sneaking ? PLAYER.sneakSpeed : PLAYER.walkSpeed;
-    const nx = input.x / magnitude;
-    const ny = input.y / magnitude;
-    player.angle = Math.atan2(ny, nx);
-    moveCircle(player, PLAYER.radius, nx * speed * dt, ny * speed * dt);
+  // --- courier movement (sneak 85, walk 170), sliding along walls
+  const mag = Math.hypot(input.x || 0, input.y || 0);
+  p.sneaking = !!input.sneak;
+  p.moving = mag > 0.001;
+  if (p.moving) {
+    const speed = p.sneaking ? PLAYER.sneak : PLAYER.walk;
+    const nx = (input.x / mag) * speed * dt;
+    const ny = (input.y / mag) * speed * dt;
+    moveCircle(p, nx, ny, PLAYER.radius);
+    p.x = Math.max(PLAYER.radius, Math.min(FIELD.w - PLAYER.radius, p.x));
+    p.y = Math.max(PLAYER.radius, Math.min(FIELD.h - PLAYER.radius, p.y));
   }
 
-  // Footsteps: running carries further, and a guard that hears one comes to look.
-  world.noiseTimer -= dt;
-  if (player.moving && world.noiseTimer <= 0) {
-    world.noiseTimer = PLAYER.noiseInterval;
-    const radius = player.sneaking ? PLAYER.sneakNoise : PLAYER.runNoise;
-    for (const guard of world.guards) {
-      if (guard.state === 'patrol' && guard.suspicion < SUSPICION.investigateAt) {
-        if (distance(guard.x, guard.y, player.x, player.y) <= radius) {
-          enterState(guard, 'investigate', { x: player.x, y: player.y });
+  // --- footsteps: every 0.5 s a moving courier makes noise; a patrolling
+  // guard inside the noise radius investigates the noise point.
+  if (p.moving) {
+    world.noiseTimer += dt;
+    if (world.noiseTimer >= PLAYER.noiseInterval) {
+      world.noiseTimer = 0;
+      const radius = p.sneaking ? PLAYER.sneakNoiseRadius : PLAYER.runNoiseRadius;
+      for (const g of world.guards) {
+        if (g.state !== 'patrol') continue;
+        if (Math.hypot(g.x - p.x, g.y - p.y) <= radius) {
+          g.state = 'investigate';
+          g.target = { x: p.x, y: p.y };
+          g.lastSeen = { x: p.x, y: p.y };
+          g.investigateTimer = GUARD.investigateTime;
+          g.atTarget = false;
+          g.pauseTimer = 0;
         }
       }
     }
+  } else {
+    world.noiseTimer = 0;
   }
 
-  // --- The guards --------------------------------------------------------
-  for (const guard of world.guards) {
-    const seen = guardSees(guard, player);
+  // --- guards: see, suspect, move
+  for (const g of world.guards) {
+    const seen = guardSees(g, p);
+    if (seen.visible) g.lastSeen = { x: p.x, y: p.y };
+
+    // suspicion rises while seen (closer / lit / running / out of bush is worse)
     if (seen.visible) {
-      guard.suspicion = Math.min(1, guard.suspicion + suspicionRate(guard, player, seen) * dt);
+      let rate = seen.dist < GUARD.visionRange / 2 ? SUSPICION.closeRate : SUSPICION.farRate;
+      if (seen.inLamp) rate *= SUSPICION.lampMultiplier;
+      if (p.moving && !p.sneaking) rate *= SUSPICION.runMultiplier;
+      if (seen.inBush) rate *= SUSPICION.bushMultiplier;
+      g.suspicion = Math.min(1, g.suspicion + rate * dt);
     } else {
-      guard.suspicion = Math.max(0, guard.suspicion - SUSPICION.decayRate * dt);
+      g.suspicion = Math.max(0, g.suspicion - SUSPICION.decay * dt);
     }
 
-    if (guard.state === 'patrol') {
-      if (guard.suspicion >= 1) {
+    // state changes on suspicion
+    if (g.suspicion >= SUSPICION.chaseAt) {
+      if (g.state !== 'chase') {
+        g.state = 'chase';
+        g.unseenTimer = 0;
         world.timesSpotted += 1;
-        enterState(guard, 'chase', { x: player.x, y: player.y });
-      } else if (guard.suspicion >= SUSPICION.investigateAt) {
-        enterState(guard, 'investigate', { x: player.x, y: player.y });
-      } else if (guard.pauseTimer > 0) {
-        guard.pauseTimer -= dt;
-        guard.angle += GUARD.scanSpeed * guard.scanDirection * dt;
+        g.pauseTimer = 0;
+        g.atTarget = false;
+      }
+    } else if (g.suspicion >= SUSPICION.investigateAt && g.state === 'patrol') {
+      g.state = 'investigate';
+      g.target = g.lastSeen ? { ...g.lastSeen } : { x: p.x, y: p.y };
+      g.investigateTimer = GUARD.investigateTime;
+      g.atTarget = false;
+      g.pauseTimer = 0;
+    }
+
+    // movement per state
+    if (g.state === 'patrol') {
+      if (g.pauseTimer > 0) {
+        g.pauseTimer -= dt;
+        g.facing += g.scanDir * GUARD.scanSpeed * dt;
       } else {
-        const target = guard.waypoints[guard.waypointIndex];
-        if (moveGuardToward(guard, target, guard.patrolSpeed, dt)) {
-          guard.waypointIndex = (guard.waypointIndex + 1) % guard.waypoints.length;
-          guard.pauseTimer = GUARD.waypointPause;
-          guard.scanDirection *= -1;
+        const wp = g.waypoints[g.waypointIndex];
+        if (moveToward(g, wp.x, wp.y, g.speed, dt)) {
+          g.pauseTimer = GUARD.waypointPause;
+          g.scanDir = -g.scanDir; // flip the scan direction each pause
+          g.waypointIndex = (g.waypointIndex + 1) % g.waypoints.length;
         }
       }
-    } else if (guard.state === 'investigate') {
-      if (guard.suspicion >= 1) {
-        world.timesSpotted += 1;
-        enterState(guard, 'chase', { x: player.x, y: player.y });
-      } else if (seen.visible) {
-        guard.target = { x: player.x, y: player.y };
-        moveGuardToward(guard, guard.target, guard.patrolSpeed * 1.25, dt);
-      } else if (guard.target) {
-        const arrived = moveGuardToward(guard, guard.target, guard.patrolSpeed * 1.25, dt);
-        if (arrived) {
-          guard.investigateTimer -= dt;
-          guard.angle += GUARD.scanSpeed * guard.scanDirection * dt;
-          if (guard.investigateTimer <= 0) {
-            guard.waypointIndex = nearestWaypointIndex(guard);
-            enterState(guard, 'return');
-          }
+    } else if (g.state === 'investigate') {
+      const t = g.target;
+      if (!t) {
+        g.state = 'patrol';
+        g.waypointIndex = nearestWaypointIndex(g);
+      } else if (!g.atTarget) {
+        if (moveToward(g, t.x, t.y, g.speed * 1.25, dt)) g.atTarget = true;
+      } else {
+        g.investigateTimer -= dt;
+        g.facing += g.scanDir * GUARD.scanSpeed * dt;
+        if (g.investigateTimer <= 0) {
+          g.state = 'patrol';
+          g.atTarget = false;
+          g.target = null;
+          g.waypointIndex = nearestWaypointIndex(g);
         }
       }
-    } else if (guard.state === 'chase') {
+    } else if (g.state === 'chase') {
+      moveToward(g, p.x, p.y, GUARD.chaseSpeed, dt);
       if (seen.visible) {
-        guard.loseSightTimer = 0;
-        guard.target = { x: player.x, y: player.y };
+        g.unseenTimer = 0;
       } else {
-        guard.loseSightTimer += dt;
-        if (guard.loseSightTimer >= GUARD.loseSightSeconds) {
-          enterState(guard, 'investigate', guard.target || { x: player.x, y: player.y });
-          continue;
+        g.unseenTimer += dt;
+        if (g.unseenTimer >= GUARD.loseSight) {
+          g.state = 'investigate';
+          g.target = g.lastSeen ? { ...g.lastSeen } : { x: p.x, y: p.y };
+          g.investigateTimer = GUARD.investigateTime;
+          g.atTarget = false;
         }
       }
-      moveGuardToward(guard, guard.target || { x: player.x, y: player.y }, GUARD.chaseSpeed, dt);
-    } else if (guard.state === 'return') {
-      // A guard walking back to its loop still reacts when it spots the courier.
-      if (guard.suspicion >= 1) {
-        world.timesSpotted += 1;
-        enterState(guard, 'chase', { x: player.x, y: player.y });
-      } else if (guard.suspicion >= SUSPICION.investigateAt) {
-        enterState(guard, 'investigate', { x: player.x, y: player.y });
-      }
-      const target = guard.waypoints[guard.waypointIndex];
-      if (moveGuardToward(guard, target, guard.patrolSpeed, dt)) {
-        guard.waypointIndex = (guard.waypointIndex + 1) % guard.waypoints.length;
-        enterState(guard, 'patrol');
-      }
     }
+  }
 
-    // Caught: a guard that has noticed the courier and gets within arm's reach.
-    if (
-      distance(guard.x, guard.y, player.x, player.y) < GUARD.catchRadius &&
-      (guard.state === 'chase' || seen.visible)
-    ) {
+  // --- caught: a guard that has noticed the courier (chasing, or seeing it
+  // right now) gets within touch distance.
+  for (const g of world.guards) {
+    const d = Math.hypot(g.x - p.x, g.y - p.y);
+    if (d < GUARD.catchRadius && (g.state === 'chase' || guardSees(g, p).visible)) {
       world.status = 'caught';
       return;
     }
   }
 
-  // --- Letters and the gate ----------------------------------------------
+  // --- letters, then the gate
   for (const letter of world.letters) {
-    if (!letter.taken && distance(player.x, player.y, letter.x, letter.y) < LETTER_PICKUP_RADIUS) {
+    if (!letter.taken && Math.hypot(letter.x - p.x, letter.y - p.y) <= LETTER_PICKUP_RADIUS) {
       letter.taken = true;
       world.lettersCollected += 1;
     }
   }
-  if (world.lettersCollected >= LETTERS_TO_WIN && pointInExit(player.x, player.y)) {
-    world.status = 'won';
-    world.winTime = world.time;
+  if (world.lettersCollected >= world.letters.length) {
+    const e = LEVEL.exit;
+    if (p.x >= e.x && p.x <= e.x + e.w && p.y >= e.y && p.y <= e.y + e.h) {
+      world.status = 'won';
+      world.rating =
+        world.timesSpotted === 0 ? 'Ghost' : world.timesSpotted === 1 ? 'Shadow' : 'Seen';
+    }
   }
 }
