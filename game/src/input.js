@@ -1,58 +1,70 @@
-// Night Post — keyboard input. WASD/arrows move, Shift sneaks.
-// Enter starts, P pauses, M mutes, R restarts. Arrow keys and space are
-// prevented from scrolling the page.
+// Night Post — keyboard input. Movement keys are held state; Enter,
+// P, M and R are one-shot actions consumed once per press.
 
 export function createInput() {
-  const keys = new Set();
-  const actions = [];
+  return {
+    keys: new Set(),
+    actions: [], // one-shot queue: 'start' | 'pause' | 'mute' | 'restart'
+  };
+}
 
+const MOVE_KEYS = {
+  KeyW: [0, -1],
+  ArrowUp: [0, -1],
+  KeyS: [0, 1],
+  ArrowDown: [0, 1],
+  KeyA: [-1, 0],
+  ArrowLeft: [-1, 0],
+  KeyD: [1, 0],
+  ArrowRight: [1, 0],
+};
+
+const ACTION_KEYS = {
+  Enter: 'start',
+  KeyP: 'pause',
+  KeyM: 'mute',
+  KeyR: 'restart',
+};
+
+export function attachInput(input, target) {
   function onKeyDown(e) {
-    if (
-      e.code === 'ArrowUp' ||
-      e.code === 'ArrowDown' ||
-      e.code === 'ArrowLeft' ||
-      e.code === 'ArrowRight' ||
-      e.code === 'Space'
-    ) {
+    if (MOVE_KEYS[e.code] || ACTION_KEYS[e.code] || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
       e.preventDefault();
     }
     if (e.repeat) return;
-    keys.add(e.code);
-    if (e.code === 'Enter') actions.push('start');
-    else if (e.code === 'KeyP') actions.push('pause');
-    else if (e.code === 'KeyM') actions.push('mute');
-    else if (e.code === 'KeyR') actions.push('restart');
+    input.keys.add(e.code);
+    const action = ACTION_KEYS[e.code];
+    if (action) input.actions.push(action);
   }
-
   function onKeyUp(e) {
-    keys.delete(e.code);
+    input.keys.delete(e.code);
   }
-
-  let target = null;
-  return {
-    attach(el) {
-      target = el;
-      el.addEventListener('keydown', onKeyDown);
-      el.addEventListener('keyup', onKeyUp);
-    },
-    detach() {
-      if (!target) return;
-      target.removeEventListener('keydown', onKeyDown);
-      target.removeEventListener('keyup', onKeyUp);
-      target = null;
-    },
-    read() {
-      let x = 0;
-      let y = 0;
-      if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
-      if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
-      if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
-      if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
-      const sneak = keys.has('ShiftLeft') || keys.has('ShiftRight');
-      return { x, y, sneak };
-    },
-    takeAction() {
-      return actions.shift() || null;
-    },
+  target.addEventListener('keydown', onKeyDown);
+  target.addEventListener('keyup', onKeyUp);
+  return () => {
+    target.removeEventListener('keydown', onKeyDown);
+    target.removeEventListener('keyup', onKeyUp);
   };
+}
+
+// Read the current movement vector + sneak flag from held keys.
+export function readMovement(input) {
+  let dx = 0;
+  let dy = 0;
+  for (const code of input.keys) {
+    const v = MOVE_KEYS[code];
+    if (v) {
+      dx += v[0];
+      dy += v[1];
+    }
+  }
+  const sneak = input.keys.has('ShiftLeft') || input.keys.has('ShiftRight');
+  return { dx, dy, sneak };
+}
+
+// Pull and clear the one-shot action queue.
+export function drainActions(input) {
+  const out = input.actions;
+  input.actions = [];
+  return out;
 }

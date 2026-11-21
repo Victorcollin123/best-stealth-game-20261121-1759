@@ -1,63 +1,68 @@
-// Night Post — all tuning and palette in one place.
-// Field: one walled courtyard, 1280x720, fixed 60 Hz step.
+// Night Post — all tuning values and the night palette.
+// One place for every number the simulation and the renderer share,
+// so a tweak here changes the game everywhere at once.
 
 export const FIELD_W = 1280;
 export const FIELD_H = 720;
 
-export const PLAYER_RADIUS = 14;
-export const PLAYER_WALK = 170;
-export const PLAYER_SNEAK = 85;
-export const PLAYER_PICKUP = 24;
+export const PLAYER = {
+  radius: 14,
+  walkSpeed: 170,
+  sneakSpeed: 85,
+  runNoiseRadius: 100,
+  sneakNoiseRadius: 30,
+  noiseInterval: 0.5,
+};
 
-export const NOISE_RUN = 100;
-export const NOISE_SNEAK = 30;
-export const NOISE_INTERVAL = 0.5;
+export const GUARD = {
+  radius: 14,
+  visionRange: 230,
+  visionHalfAngle: 0.6,
+  catchRadius: 26,
+  bushSpotRange: 55,
+  waypointPause: 0.8,
+  scanSpeed: 0.8,
+  loseSightTime: 3,
+  investigateTime: 4,
+  chaseSpeed: 150,
+  patrolSpeeds: [70, 80, 90],
+};
 
-export const GUARD_RADIUS = 14;
-export const VISION_RANGE = 230;
-export const VISION_HALF_ANGLE = 0.6;
-export const CATCH_RADIUS = 26;
-export const BUSH_SPOT = 55;
-export const WAYPOINT_PAUSE = 0.8;
-export const SCAN_SPEED = 0.8;
-export const SCAN_AMPLITUDE = 0.9;
-export const LOSE_SIGHT = 3;
-export const INVESTIGATE_TIME = 4;
-export const CHASE_SPEED = 150;
-export const INVESTIGATE_SPEED_MUL = 1.25;
+export const SUSPICION = {
+  closeRate: 1.4,
+  farRate: 0.35,
+  lampMultiplier: 1.6,
+  runMultiplier: 1.5,
+  decayRate: 0.5,
+  bushMultiplier: 0.5,
+  investigateAt: 0.45,
+  chaseAt: 1.0,
+};
 
-export const SUSPICION_CLOSE_RATE = 1.4;
-export const SUSPICION_FAR_RATE = 0.35;
-export const SUSPICION_CLOSE_DIST = 120;
-export const SUSPICION_LAMP_MUL = 1.6;
-export const SUSPICION_RUN_MUL = 1.5;
-export const SUSPICION_BUSH_MUL = 0.5;
-export const SUSPICION_DECAY = 0.5;
-export const SUSPICION_INVESTIGATE = 0.45;
-export const SUSPICION_CHASE = 1.0;
+export const LETTER_PICKUP_RADIUS = 24;
 
 export const PALETTE = {
-  floor: '#0b1220',
-  floorLine: '#111a2e',
-  wall: '#2b3350',
-  wallEdge: '#4a5878',
-  crate: '#4a3524',
-  crateEdge: '#7a5a38',
-  bush: '#14301c',
-  bushLeaf: '#1f7a37',
-  lampGlow: 'rgba(250, 204, 21, 0.16)',
-  lampPost: '#facc15',
-  letter: '#fde68a',
-  letterGlow: 'rgba(253, 230, 138, 0.5)',
-  exit: '#22c55e',
-  exitGlow: 'rgba(34, 197, 94, 0.35)',
-  player: '#e2e8f0',
-  playerAccent: '#38bdf8',
-  guard: '#f87171',
-  coneCalm: 'rgba(250, 204, 21, 0.18)',
-  coneAlert: 'rgba(249, 115, 22, 0.30)',
-  coneChase: 'rgba(239, 68, 68, 0.38)',
-  hud: '#e2e8f0',
-  hudDim: '#94a3b8',
-  titleBg: 'rgba(2, 6, 23, 0.72)',
+  night: '#0b1026',
+  ground: '#141b33',
+  groundAlt: '#10182e',
+  wall: '#2c3554',
+  wallTop: '#3a4568',
+  crate: '#4a3a28',
+  crateTop: '#6b5636',
+  bush: '#1d4d2b',
+  bushDark: '#143a20',
+  lampGlow: 'rgba(255, 214, 120, 0.16)',
+  lampCore: '#ffd678',
+  letter: '#f5e6a3',
+  player: '#e8b64c',
+  playerSneak: '#c98f2e',
+  guard: '#c94f4f',
+  guardCone: 'rgba(255, 214, 110, 0.20)',
+  guardConeAlert: 'rgba(255, 80, 60, 0.30)',
+  exit: '#3fbf6f',
+  exitGlow: 'rgba(63, 191, 111, 0.25)',
+  text: '#e8ecf7',
+  textDim: '#9aa5c4',
+  title: '#f5e6a3',
+  danger: '#ff5a4e',
 };

@@ -1,369 +1,395 @@
-// Night Post — the autopilot and the staged shots. The autopilot plays
-// with the same cautious rules a careful player would: sneak, wait in
-// bushes when seen, never walk into a guard's cone, flee when chased.
-// It plays the same game the browser does — only through step().
+// Night Post — the screenshot autopilot: a cautious scripted courier.
+// It steers with a navigation graph, flees to bushes when spotted,
+// probes ahead at sneak speed before committing, and always sneaks on
+// the approach — only a chase ever runs.
 
-import { PLAYER_RADIUS, PLAYER_SNEAK } from './config.js';
-import { BUSHES, LETTERS, EXIT_RECT } from './level.js';
-import {
-  createWorld,
-  step,
-  guardSees,
-  seenAt,
-  pointInBush,
-  dist,
-  segmentClearOfWalls,
-} from './world.js';
+import { PLAYER, GUARD } from './config.js';
+import { BUSHES, LETTERS, SOLIDS, exitCenter } from './level.js';
+import { createWorld, step, guardSees, dist, segmentHitsRect, segmentNearPoint } from './world.js';
 
-// 22 walkable points that span the courtyard. Two nodes are linked when
-// a courier (radius 14) can walk straight between them.
+// The navigation graph: letters, the gate, gaps, bushes and corridor
+// midpoints. Two nodes join when the courier (radius 14) can walk
+// straight between them — solids inflated by 14.
 export const NODES = [
   { x: 150, y: 120 }, // 0 letter 1
   { x: 1140, y: 620 }, // 1 letter 2
   { x: 760, y: 80 }, // 2 letter 3
   { x: 1206, y: 86 }, // 3 exit centre
-  { x: 312, y: 360 }, // 4 W2 gap
-  { x: 652, y: 60 }, // 5 W3 top gap
-  { x: 652, y: 540 }, // 6 W3 bottom gap
-  { x: 972, y: 120 }, // 7 W4 top gap
-  { x: 430, y: 60 }, // 8 B1
-  { x: 760, y: 200 }, // 9 B2
-  { x: 180, y: 340 }, // 10 B3
-  { x: 560, y: 620 }, // 11 B4
-  { x: 1100, y: 340 }, // 12 B5
-  { x: 880, y: 620 }, // 13 B6
-  { x: 180, y: 480 }, // 14 west mid
-  { x: 500, y: 360 }, // 15 centre
-  { x: 1060, y: 300 }, // 16 east mid
-  { x: 600, y: 200 }, // 17
-  { x: 900, y: 80 }, // 18
-  { x: 400, y: 300 }, // 19
-  { x: 500, y: 620 }, // 20
-  { x: 1080, y: 520 }, // 21
+  { x: 312, y: 360 }, // 4 gap between W1 and W2
+  { x: 500, y: 360 }, // 5 middle
+  { x: 600, y: 200 }, // 6
+  { x: 652, y: 60 }, // 7 top middle
+  { x: 900, y: 80 }, // 8
+  { x: 972, y: 100 }, // 9
+  { x: 1060, y: 300 }, // 10 east middle
+  { x: 1140, y: 300 }, // 11 east corridor
+  { x: 80, y: 640 }, // 12 player start
+  { x: 430, y: 60 }, // 13 B1
+  { x: 760, y: 200 }, // 14 B2
+  { x: 180, y: 340 }, // 15 B3
+  { x: 560, y: 620 }, // 16 B4
+  { x: 1100, y: 340 }, // 17 B5
+  { x: 880, y: 620 }, // 18 B6
+  { x: 240, y: 120 }, // 19 west upper corridor
+  { x: 430, y: 560 }, // 20 south middle
+  { x: 760, y: 620 }, // 21 south-east corridor
 ];
 
-export function nearestNode(p) {
+function segmentClearOfSolids(ax, ay, bx, by) {
+  for (const s of SOLIDS) {
+    const inflated = { x: s.x - 14, y: s.y - 14, w: s.w + 28, h: s.h + 28 };
+    if (segmentHitsRect(ax, ay, bx, by, inflated)) return false;
+  }
+  return true;
+}
+
+function segmentClear(ax, ay, bx, by, avoid) {
+  if (!segmentClearOfSolids(ax, ay, bx, by)) return false;
+  for (const a of avoid || []) {
+    if (segmentNearPoint(ax, ay, bx, by, a.x, a.y).dist < a.r) return false;
+  }
+  return true;
+}
+
+function nearestNode(x, y) {
   let best = 0;
-  let bd = Infinity;
-  NODES.forEach((n, i) => {
-    const d = dist(p.x, p.y, n.x, n.y);
-    if (d < bd) {
-      bd = d;
-      best = i;
-    }
-  });
+  let bestD = Infinity;
+  for (let i = 0; i < NODES.length; i++) {
+    const d = dist(x, y, NODES[i].x, NODES[i].y);
+    if (d < bestD) { bestD = d; best = i; }
+  }
   return best;
 }
 
-export function segmentNearPoint(px, py, x1, y1, x2, y2) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len2 = dx * dx + dy * dy;
-  let t = len2 === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
-}
-
-function edgeClear(a, b, avoid) {
-  if (!segmentClearOfWalls(a.x, a.y, b.x, b.y, PLAYER_RADIUS)) return false;
-  return avoid.every((av) => segmentNearPoint(av.x, av.y, a.x, a.y, b.x, b.y) > av.r);
-}
-
-// Breadth-first search over the node graph. Returns node indices from
-// fromId to toId, or null when no route exists.
+// Breadth-first search over the graph, skipping edges that pass within
+// r of an `avoid` point {x, y, r}. Returns an array of node ids, or
+// null when no route exists.
 export function findPath(fromId, toId, avoid) {
   if (fromId === toId) return [fromId];
   const prev = new Array(NODES.length).fill(-1);
   const queue = [fromId];
   prev[fromId] = fromId;
-  while (queue.length) {
+  while (queue.length > 0) {
     const cur = queue.shift();
-    for (let i = 0; i < NODES.length; i++) {
-      if (prev[i] !== -1 || i === cur) continue;
-      if (!edgeClear(NODES[cur], NODES[i], avoid)) continue;
-      prev[i] = cur;
-      if (i === toId) {
+    for (let nxt = 0; nxt < NODES.length; nxt++) {
+      if (prev[nxt] !== -1 || nxt === cur) continue;
+      if (!segmentClear(NODES[cur].x, NODES[cur].y, NODES[nxt].x, NODES[nxt].y, avoid)) continue;
+      prev[nxt] = cur;
+      if (nxt === toId) {
         const path = [toId];
-        let n = toId;
-        while (n !== fromId) {
-          n = prev[n];
-          path.unshift(n);
+        let node = toId;
+        while (node !== fromId) {
+          node = prev[node];
+          path.unshift(node);
         }
         return path;
       }
-      queue.push(i);
+      queue.push(nxt);
     }
   }
   return null;
 }
 
-function steerPoint(world, from, target, avoid, mem) {
-  if (
-    segmentClearOfWalls(from.x, from.y, target.x, target.y, PLAYER_RADIUS) &&
-    avoid.every((av) => segmentNearPoint(av.x, av.y, from.x, from.y, target.x, target.y) > av.r)
-  ) {
-    return target;
+// Steer from `from` toward `target`: the target itself when the segment
+// is clear of walls and avoid points, otherwise the next node on the
+// graph route (recomputed when the target changes, the path runs out,
+// or every 0.5 s while avoiding).
+export function steerPoint(from, target, memory, dt, avoid) {
+  if (segmentClear(from.x, from.y, target.x, target.y, avoid)) {
+    memory.path = null;
+    return { ...target };
   }
-  const key = `${target.x},${target.y}`;
-  mem.pathTimer -= 1 / 60;
-  if (!mem.path || mem.pathTarget !== key || mem.pathTimer <= 0) {
-    mem.path = findPath(nearestNode(from), nearestNode(target), avoid);
-    mem.pathTarget = key;
-    mem.pathTimer = 0.5;
+  const fromId = nearestNode(from.x, from.y);
+  const toId = nearestNode(target.x, target.y);
+  const targetKey = `${target.x},${target.y}`;
+  memory.pathTimer = (memory.pathTimer || 0) + dt;
+  const stale = !memory.path || memory.pathTarget !== targetKey || memory.pathTimer > 0.5;
+  if (stale) {
+    memory.path = findPath(fromId, toId, avoid);
+    memory.pathTarget = targetKey;
+    memory.pathTimer = 0;
   }
-  if (!mem.path || mem.path.length === 0) return target;
-  if (mem.path.length === 1) return target;
-  const first = NODES[mem.path[0]];
-  if (dist(from.x, from.y, first.x, first.y) > 24) return first;
-  return NODES[mem.path[1]];
+  const path = memory.path;
+  if (!path || path.length < 2) return { ...target };
+  // Skip nodes already reached.
+  while (path.length > 1 && dist(from.x, from.y, NODES[path[1]].x, NODES[path[1]].y) < 20) {
+    path.shift();
+  }
+  if (path.length < 2) return { ...target };
+  return { ...NODES[path[1]] };
 }
 
-function nearestBush(x, y) {
-  let best = BUSHES[0];
-  let bd = Infinity;
-  for (const b of BUSHES) {
-    const d = dist(x, y, b.x, b.y);
-    if (d < bd) {
-      bd = d;
-      best = b;
-    }
-  }
-  return best;
-}
-
-// The bush furthest from every guard, discounted by distance from the courier.
-function bestBush(world) {
-  const p = world.player;
+// The bush furthest from every guard, discounted by distance from the
+// courier — the sticky flee destination, recomputed every 0.5 s.
+export function bestBush(world) {
   let best = null;
-  let bs = -Infinity;
+  let bestScore = -Infinity;
   for (const b of BUSHES) {
-    let mg = Infinity;
-    for (const g of world.guards) mg = Math.min(mg, dist(b.x, b.y, g.x, g.y));
-    const score = mg - dist(b.x, b.y, p.x, p.y) * 0.5;
-    if (score > bs) {
-      bs = score;
-      best = b;
-    }
+    let minGuard = Infinity;
+    for (const g of world.guards) minGuard = Math.min(minGuard, dist(b.x, b.y, g.x, g.y));
+    const score = minGuard - 0.5 * dist(world.player.x, world.player.y, b.x, b.y);
+    if (score > bestScore) { bestScore = score; best = b; }
   }
   return best;
 }
 
-// The nearest bush further from the danger guard than the courier is,
-// and at least 100 px from every guard; otherwise the furthest bush.
-function safestBush(world, danger) {
-  const p = world.player;
-  const dDanger = dist(p.x, p.y, danger.x, danger.y);
-  const cands = BUSHES.filter(
-    (b) =>
-      dist(b.x, b.y, danger.x, danger.y) > dDanger &&
-      world.guards.every((g) => dist(b.x, b.y, g.x, g.y) >= 100),
-  );
-  if (cands.length) {
-    cands.sort((a, b) => dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y));
-    return cands[0];
-  }
-  return bestBush(world);
-}
-
-function nearestGuardTo(world) {
-  const p = world.player;
-  let best = world.guards[0];
-  let bd = Infinity;
-  for (const g of world.guards) {
-    const d = dist(g.x, g.y, p.x, p.y);
-    if (d < bd) {
-      bd = d;
-      best = g;
+// The safest bush to retreat to: the nearest bush further from the
+// danger guard than the courier is, and at least 100 px from every
+// guard — falling back to the furthest-from-all-guards bush.
+export function safestBush(world, dangerGuard) {
+  const player = world.player;
+  let best = null;
+  let bestD = Infinity;
+  for (const b of BUSHES) {
+    const dPlayer = dist(player.x, player.y, b.x, b.y);
+    const dDanger = dist(b.x, b.y, dangerGuard.x, dangerGuard.y);
+    const dCourier = dist(player.x, player.y, dangerGuard.x, dangerGuard.y);
+    if (dDanger <= dCourier) continue;
+    let ok = true;
+    for (const g of world.guards) {
+      if (dist(b.x, b.y, g.x, g.y) < 100) { ok = false; break; }
     }
+    if (!ok) continue;
+    if (dPlayer < bestD) { bestD = dPlayer; best = b; }
   }
-  return best;
+  if (best) return best;
+  let fallback = null;
+  let fallbackScore = -Infinity;
+  for (const b of BUSHES) {
+    let minGuard = Infinity;
+    for (const g of world.guards) minGuard = Math.min(minGuard, dist(b.x, b.y, g.x, g.y));
+    if (minGuard > fallbackScore) { fallbackScore = minGuard; fallback = b; }
+  }
+  return fallback;
 }
 
-function moveToward(world, point, memory, sneak, avoid) {
-  const p = world.player;
-  const d = dist(p.x, p.y, point.x, point.y);
-  if (d < 4) return { x: 0, y: 0, sneak: true };
-  const sp = steerPoint(world, p, point, avoid || [], memory);
-  const dx = sp.x - p.x;
-  const dy = sp.y - p.y;
-  const len = Math.hypot(dx, dy) || 1;
-  return { x: dx / len, y: dy / len, sneak };
-}
-
-function fleeDirect(world, guard) {
-  const p = world.player;
-  const dx = p.x - guard.x;
-  const dy = p.y - guard.y;
-  const len = Math.hypot(dx, dy) || 1;
-  return { x: dx / len, y: dy / len, sneak: false };
-}
-
-export function freshMemory(world) {
+export function createMemory() {
   return {
-    lastX: world.player.x,
-    lastY: world.player.y,
     stuckTimer: 0,
+    prevX: null,
+    prevY: null,
+    hadInput: false,
+    waitTimer: 0,
+    detouring: false,
     fleeBush: null,
     fleeTimer: 0,
-    waitTimer: 0,
     path: null,
     pathTarget: null,
     pathTimer: 0,
   };
 }
 
-// One cautious step toward target. brave skips the personal-space and
-// exposed rules (used only to stage the alert shot).
-export function cautiousStep(world, target, memory, dt, options) {
-  const opts = options || {};
-  const brave = !!opts.brave;
-  const p = world.player;
+function moveInput(from, to, sneak) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 0.001) return { dx: 0, dy: 0, sneak: !!sneak };
+  return { dx: dx / d, dy: dy / d, sneak: !!sneak };
+}
 
-  // Stuck against a wall: back out to the nearest bush and re-route.
-  const moved = Math.hypot(p.x - memory.lastX, p.y - memory.lastY);
-  if (moved < 0.5) memory.stuckTimer += dt;
-  else memory.stuckTimer = 0;
-  memory.lastX = p.x;
-  memory.lastY = p.y;
-  if (memory.stuckTimer > 0.1) {
-    memory.stuckTimer = 0;
-    return moveToward(world, nearestBush(p.x, p.y), memory, false);
-  }
+function waitInput() {
+  return { dx: 0, dy: 0, sneak: true };
+}
 
-  const chasing = world.guards.filter((g) => g.state === 'chase');
-  const maxSusp = Math.max(0, ...world.guards.map((g) => g.suspicion));
-  const guard = nearestGuardTo(world);
-  const guardDist = dist(guard.x, guard.y, p.x, p.y);
+// One cautious step toward `target`. Returns a movement input.
+export function cautiousStep(world, target, memory, dt, options = {}) {
+  const player = world.player;
+  const guards = world.guards;
+  const brave = !!options.brave;
 
-  // Fleeing a chase: run straight away when the guard is close, else run
-  // to the best bush (recomputed every 0.5 s, sticky in between).
-  if (!brave && (chasing.length > 0 || maxSusp > 0.6)) {
-    if (guardDist < 100) return fleeDirect(world, guard);
-    memory.fleeTimer -= dt;
-    if (!memory.fleeBush || memory.fleeTimer <= 0) {
-      memory.fleeBush = bestBush(world);
-      memory.fleeTimer = 0.5;
+  // --- what does the courier know right now? ---
+  let seenNow = false;
+  let maxSuspicion = 0;
+  let nearestGuard = null;
+  let nearestD = Infinity;
+  for (const g of guards) {
+    maxSuspicion = Math.max(maxSuspicion, g.suspicion);
+    const d = dist(g.x, g.y, player.x, player.y);
+    if (d < nearestD) { nearestD = d; nearestGuard = g; }
+    if (guardSees(g, player).visible) seenNow = true;
+    if (g.state === 'pause') {
+      // A pausing guard sweeps its whole cone: count the full sweep.
+      const saved = g.facing;
+      for (const off of [-0.9, 0, 0.9]) {
+        g.facing = g.baseFacing + off;
+        if (guardSees(g, player).visible) seenNow = true;
+      }
+      g.facing = saved;
     }
-    return moveToward(world, memory.fleeBush, memory, false, [
-      { x: guard.x, y: guard.y, r: 60 },
-    ]);
   }
+  const chasing = guards.some((g) => g.state === 'chase');
+  const inBush = BUSHES.some((b) => dist(player.x, player.y, b.x, b.y) <= b.r);
 
-  // Exposed: step out of sight, into the safest bush.
-  if (!brave && seenAt(world, p.x, p.y)) {
-    return moveToward(world, safestBush(world, guard), memory, false);
+  // --- stuck detection: the last input moved the courier < 0.5 px ---
+  if (memory.hadInput && memory.prevX !== null) {
+    const moved = dist(player.x, player.y, memory.prevX, memory.prevY);
+    if (moved < 0.5) memory.stuckTimer += dt;
+    else memory.stuckTimer = 0;
   }
+  memory.prevX = player.x;
+  memory.prevY = player.y;
 
-  // Personal space: a guard within 100 px is too close — leave quietly.
-  if (!brave && guardDist < 100) {
-    return moveToward(world, safestBush(world, guard), memory, false);
-  }
+  let input;
+  const avoid = guards.map((g) => ({ x: g.x, y: g.y, r: 60 }));
 
-  // Hidden in a bush with a guard near: stay put.
-  if (!brave && pointInBush(p.x, p.y) && guardDist < 150) {
-    return { x: 0, y: 0, sneak: true };
-  }
-
-  // Waited too long: retreat to a bush until the courtyard calms.
-  if (memory.waitTimer > 2.5) {
-    if (maxSusp < 0.2 && guardDist >= 200) {
+  if (!brave && memory.stuckTimer > 0.1) {
+    // Wedged on a corner: break for the nearest bush and reset.
+    let nearest = null;
+    let nd = Infinity;
+    for (const b of BUSHES) {
+      const d = dist(player.x, player.y, b.x, b.y);
+      if (d < nd) { nd = d; nearest = b; }
+    }
+    memory.stuckTimer = 0;
+    input = moveInput(player, nearest, true);
+  } else if (!brave && (chasing || maxSuspicion > 0.6)) {
+    // Flee: run the graph route to a sticky best bush.
+    if (nearestD < 100) {
+      // A guard is right on top of us: run straight away first.
+      const dx = player.x - nearestGuard.x;
+      const dy = player.y - nearestGuard.y;
+      const d = Math.hypot(dx, dy) || 1;
+      input = { dx: dx / d, dy: dy / d, sneak: false };
+    } else {
+      memory.fleeTimer += dt;
+      if (!memory.fleeBush || memory.fleeTimer > 0.5) {
+        memory.fleeBush = bestBush(world);
+        memory.fleeTimer = 0;
+      }
+      const dest = steerPoint(player, memory.fleeBush, memory, dt, avoid);
+      input = moveInput(player, dest, false);
+    }
+    memory.waitTimer = 0;
+  } else if (!brave && seenNow) {
+    // Exposed inside a cone right now: retreat to the safest bush.
+    const dest = steerPoint(player, safestBush(world, nearestGuard), memory, dt, avoid);
+    input = moveInput(player, dest, true);
+    memory.waitTimer = 0;
+  } else if (!brave && nearestD < 100) {
+    // Personal space: a guard is too close.
+    const dest = steerPoint(player, safestBush(world, nearestGuard), memory, dt, avoid);
+    input = moveInput(player, dest, true);
+    memory.waitTimer = 0;
+  } else if (!brave && inBush && nearestD < 150) {
+    // Hidden, but a guard is near: stay put.
+    input = waitInput();
+  } else if (!brave && memory.detouring) {
+    // Detour until the heat dies down.
+    if (maxSuspicion < 0.2 && nearestD > 200) {
+      memory.detouring = false;
       memory.waitTimer = 0;
     } else {
-      return moveToward(world, safestBush(world, guard), memory, false);
+      const dest = steerPoint(player, safestBush(world, nearestGuard), memory, dt, avoid);
+      input = moveInput(player, dest, true);
+    }
+  } else if (!brave && memory.waitTimer > 2.5) {
+    // Waited too long: retreat to a bush until it is safe again.
+    memory.detouring = true;
+    const dest = steerPoint(player, safestBush(world, nearestGuard), memory, dt, avoid);
+    input = moveInput(player, dest, true);
+  } else {
+    // Probe: look 1.5 s ahead at sneak speed; if that point is seen,
+    // wait instead. The courier always sneaks on the approach.
+    const dir = moveInput(player, target, true);
+    const probeX = player.x + dir.dx * PLAYER.sneakSpeed * 1.5;
+    const probeY = player.y + dir.dy * PLAYER.sneakSpeed * 1.5;
+    let probeSeen = false;
+    if (!brave) {
+      for (const g of guards) {
+        if (guardSees(g, { x: probeX, y: probeY }).visible) { probeSeen = true; break; }
+      }
+      if (!segmentClearOfSolids(player.x, player.y, probeX, probeY)) probeSeen = false;
+    }
+    if (probeSeen) {
+      memory.waitTimer += dt;
+      input = waitInput();
+    } else {
+      memory.waitTimer = 0;
+      const dest = steerPoint(player, target, memory, dt, brave ? [] : avoid);
+      input = moveInput(player, dest, true);
     }
   }
 
-  // Probe: look 1.5 s ahead at sneak speed; if that spot is seen, wait.
-  const dx = target.x - p.x;
-  const dy = target.y - p.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const probeX = p.x + (dx / len) * PLAYER_SNEAK * 1.5;
-  const probeY = p.y + (dy / len) * PLAYER_SNEAK * 1.5;
-  if (!brave && seenAt(world, probeX, probeY)) {
-    memory.waitTimer += dt;
-    return { x: 0, y: 0, sneak: true };
-  }
-  memory.waitTimer = 0;
-  // Approach: always sneak.
-  return moveToward(world, target, memory, true);
+  memory.hadInput = Math.hypot(input.dx, input.dy) > 0.01;
+  return input;
 }
 
-// Drive the autopilot through targets until done(world) or maxSeconds.
-export function runUntil(world, targets, done, maxSeconds) {
+// Advance the world through `targets` in order (each within 24 px)
+// until done(world) is true, the world ends, or maxSeconds elapse.
+export function runUntil(world, targets, done, maxSeconds, options = {}) {
   const dt = 1 / 60;
-  const memory = freshMemory(world);
+  const memory = createMemory();
+  let t = 0;
   let ti = 0;
-  const maxSteps = Math.floor(maxSeconds * 60);
-  for (let i = 0; i < maxSteps; i++) {
-    if (world.status !== 'playing') break;
+  while (t < maxSeconds && world.status === 'playing') {
     if (done && done(world)) break;
-    while (
-      ti < targets.length &&
-      dist(world.player.x, world.player.y, targets[ti].x, targets[ti].y) < 24
-    ) {
-      ti++;
-    }
-    if (ti >= targets.length) break;
-    const input = cautiousStep(world, targets[ti], memory, dt);
+    const target = targets[Math.min(ti, targets.length - 1)];
+    const input = cautiousStep(world, target, memory, dt, options);
     step(world, input, dt);
+    t += dt;
+    if (ti < targets.length - 1 && dist(world.player.x, world.player.y, target.x, target.y) <= 24) {
+      ti += 1;
+    }
   }
-  return world;
+  return { world, seconds: t, targetIndex: ti };
 }
 
-// Staged shots. The first three are the submitted screenshots; 'end' is
-// the full route, kept as a regression probe of the autopilot.
-export function stageShot(name, seed) {
-  const world = createWorld(seed);
+// The 'end' route: letter 1, across the middle, letter 3, down the
+// east side, letter 2, then the green gate. 150 s cap.
+export const END_ROUTE = [
+  { x: LETTERS[0].x, y: LETTERS[0].y },
+  { x: 312, y: 360 },
+  { x: 500, y: 360 },
+  { x: 600, y: 200 },
+  { x: 652, y: 60 },
+  { x: LETTERS[2].x, y: LETTERS[2].y },
+  { x: 900, y: 80 },
+  { x: 972, y: 100 },
+  { x: 1060, y: 300 },
+  { x: LETTERS[1].x, y: LETTERS[1].y },
+  { x: 1140, y: 300 },
+  exitCenter(),
+];
+
+// Stage one screenshot scene and return the world in its final frame.
+export function stageShot(name, seed = 1) {
   const dt = 1 / 60;
   if (name === 'start') {
-    for (let i = 0; i < 5 * 60; i++) step(world, { x: 0, y: 0, sneak: false }, dt);
+    const world = createWorld(seed);
+    for (let i = 0; i < 5 / dt; i++) step(world, { dx: 0, dy: 0, sneak: false }, dt);
     return world;
   }
   if (name === 'play') {
-    runUntil(world, [{ x: 150, y: 120 }], (w) => w.letters[0].collected, 60);
+    const world = createWorld(seed);
+    runUntil(world, [{ x: LETTERS[0].x, y: LETTERS[0].y }], (w) => w.lettersCollected >= 1, 60);
     return world;
   }
   if (name === 'alert') {
-    runUntil(world, [{ x: 260, y: 400 }], null, 60);
-    // Stand on Wren's path, brave, until she starts chasing; then run
-    // away for 2 s of chase, keeping roughly 120 px from her.
-    const mem = freshMemory(world);
-    let chaseTime = 0;
-    let fleeing = false;
-    for (let i = 0; i < 90 * 60; i++) {
-      if (world.status !== 'playing') break;
-      const chasing = world.guards.some((g) => g.state === 'chase');
-      if (chasing) {
-        fleeing = true;
-        chaseTime += dt;
-      }
-      if (fleeing && chaseTime >= 2) break;
-      if (fleeing) {
-        const g = nearestGuardTo(world);
-        step(world, fleeDirect(world, g), dt);
+    const world = createWorld(seed);
+    world.player.x = 260;
+    world.player.y = 400;
+    // Stand on Wren's path until chased, then run for 2 s keeping ~120 px.
+    let chasedFor = 0;
+    let t = 0;
+    while (t < 40 && world.status === 'playing') {
+      const chasingGuard = world.guards.find((g) => g.state === 'chase');
+      if (chasingGuard) {
+        chasedFor += dt;
+        if (chasedFor >= 2) break;
+        const dx = world.player.x - chasingGuard.x;
+        const dy = world.player.y - chasingGuard.y;
+        const d = Math.hypot(dx, dy) || 1;
+        step(world, { dx: dx / d, dy: dy / d, sneak: false }, dt);
       } else {
-        const input = cautiousStep(world, { x: 260, y: 400 }, mem, dt, { brave: true });
-        step(world, input, dt);
+        step(world, { dx: 0, dy: 0, sneak: false }, dt);
       }
+      t += dt;
     }
     return world;
   }
   if (name === 'end') {
-    const route = [
-      { x: 150, y: 120 },
-      { x: 312, y: 360 },
-      { x: 500, y: 360 },
-      { x: 600, y: 200 },
-      { x: 652, y: 60 },
-      { x: 760, y: 80 },
-      { x: 900, y: 80 },
-      { x: 972, y: 100 },
-      { x: 1060, y: 300 },
-      { x: 1140, y: 620 },
-      { x: 1140, y: 300 },
-      { x: 1206, y: 86 },
-    ];
-    runUntil(world, route, (w) => w.status !== 'playing', 150);
+    const world = createWorld(seed);
+    runUntil(world, END_ROUTE, (w) => w.status === 'won', 150);
     return world;
   }
   throw new Error(`unknown shot: ${name}`);

@@ -1,30 +1,37 @@
-// Night Post — make.fun entrypoint (round 2).
+// Night Post — make.fun entrypoint (Node 22+).
+// Copies game/ and screenshots/ into the output directory and writes
+// dossier.json via the vendored buildDossier.
 //
-// The grader copies this repo to /bot and runs `node /bot/main.ts` with an
-// empty writable /output. This program copies the game and screenshots in
-// and builds the dossier.
-//
-// Round-1 fix: /output is a mount point in the grader, and removing the
-// folder itself fails (rmdir on a mount throws, exiting 1). So the output
-// folder is never removed — only its CONTENTS are cleared. That behaves
-// identically on a normal folder and succeeds on a mount.
+// IMPORTANT: the grader's output folder may be a mount point, so this
+// script NEVER removes the output folder itself. It creates the folder
+// if needed, then deletes only the entries inside it.
 
-import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, cpSync, existsSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const root = dirname(fileURLToPath(import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR || '/output';
+const here = dirname(fileURLToPath(import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR || join(here, 'output');
 
+// Create the output folder (never delete it — it may be a mount point).
 mkdirSync(out, { recursive: true });
-const existing = readdirSync(out);
-for (const entry of existing) {
-  rmSync(join(out, entry), { recursive: true, force: true });
-}
-cpSync(join(root, 'game'), join(out, 'game'), { recursive: true });
-cpSync(join(root, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 
+// Clear only the entries inside the output folder.
+let cleared = 0;
+for (const entry of readdirSync(out)) {
+  rmSync(join(out, entry), { recursive: true, force: true });
+  cleared += 1;
+}
+
+// Copy the game and the screenshots in.
+const gameDir = join(here, 'game');
+const shotsDir = join(here, 'screenshots');
+if (existsSync(gameDir)) cpSync(gameDir, join(out, 'game'), { recursive: true });
+if (existsSync(shotsDir)) cpSync(shotsDir, join(out, 'screenshots'), { recursive: true });
+
+// buildDossier returns the dossier as bytes; the caller writes the
+// dossier.json file itself.
 const dossierBytes = buildDossier(out, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
@@ -33,8 +40,9 @@ const dossierBytes = buildDossier(out, {
   game_path_max_bytes: 1000,
 });
 writeFileSync(join(out, 'dossier.json'), dossierBytes);
+const dossier = JSON.parse(Buffer.from(dossierBytes).toString('utf8'));
 
-const dossier = JSON.parse(new TextDecoder().decode(dossierBytes));
 console.log(
-  `dossier: out=${out} cleared=${existing.length} cover=${dossier.images[dossier.cover].name} images=${dossier.images.length} text=${dossier.text.length} bytes`,
+  `Night Post dossier written: ${dossier.images?.length ?? 0} screenshots, ` +
+  `cover ${dossier.cover}, schema ${dossier.schema}, cleared=${cleared}`,
 );

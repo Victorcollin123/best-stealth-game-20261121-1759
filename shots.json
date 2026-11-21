@@ -1,1 +1,1 @@
-[{"file":"1-start.jpg","url":"http://127.0.0.1:PORT/game/index.html?shot=start&seed=1"},{"file":"2-play.jpg","url":"http://127.0.0.1:PORT/game/index.html?shot=play&seed=1"},{"file":"3-alert.jpg","url":"http://127.0.0.1:PORT/game/index.html?shot=alert&seed=1"}]
+[{"caption":"Title screen over the night courtyard","file":"1-start.jpg","url":"?shot=start&seed=1"},{"caption":"Sneaking to the first letter, 1 of 3 collected","file":"2-play.jpg","url":"?shot=play&seed=1"},{"caption":"Spotted by Wren mid-chase — SPOTTED, RUN!","file":"3-alert.jpg","url":"?shot=alert&seed=1"}]
